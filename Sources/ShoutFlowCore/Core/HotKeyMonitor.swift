@@ -202,7 +202,7 @@ public final class HotKeyMonitor {
         if type == .flagsChanged || type == .keyDown || type == .keyUp {
             let flags = event.flags
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            handleKeyEvent(flags: flags, keyCode: keyCode, isKeyDownEvent: (type == .keyDown))
+            handleKeyEvent(flags: flags, keyCode: keyCode, isFlagsChanged: (type == .flagsChanged), isKeyDownEvent: (type == .keyDown))
         }
 
         return Unmanaged.passRetained(event)
@@ -233,7 +233,7 @@ public final class HotKeyMonitor {
 
         if event.type == .flagsChanged || event.type == .keyDown || event.type == .keyUp {
             let cgFlags = CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue))
-            handleKeyEvent(flags: cgFlags, keyCode: Int64(event.keyCode), isKeyDownEvent: (event.type == .keyDown))
+            handleKeyEvent(flags: cgFlags, keyCode: Int64(event.keyCode), isFlagsChanged: (event.type == .flagsChanged), isKeyDownEvent: (event.type == .keyDown))
         }
     }
 
@@ -274,48 +274,80 @@ public final class HotKeyMonitor {
         }
     }
 
-    private func handleKeyEvent(flags: CGEventFlags, keyCode: Int64, isKeyDownEvent: Bool) {
-        let hotkeyType = configManager.config.hotkey.type.lowercased()
-
-        var isPressed = false
-
-        switch hotkeyType {
+    public static func evaluateKeyIsPressed(
+        hotkeyType: String,
+        flags: CGEventFlags,
+        keyCode: Int64,
+        isFlagsChanged: Bool,
+        isKeyDownEvent: Bool,
+        isCurrentlyPressed: Bool
+    ) -> Bool? {
+        let type = hotkeyType.lowercased()
+        switch type {
         case "fn":
+            // Strict filtering: Arrow keys (123-126) and other extended keys share the maskSecondaryFn flag on macOS!
+            // The physical Fn/Globe key has keyCode 63 (kVK_Function) and only emits flagsChanged events.
+            guard isFlagsChanged || keyCode == 63 else { return nil }
+            guard keyCode == 63 || isCurrentlyPressed else { return nil }
+
             let fnMask: UInt64 = 0x800000
-            let hasFnFlag = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
-            isPressed = hasFnFlag
+            return (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
 
         case "rightcommand":
-            isPressed = flags.contains(.maskCommand) && (keyCode == 54 || isHotkeyCurrentlyPressed)
+            guard isFlagsChanged || keyCode == 54 else { return nil }
+            guard keyCode == 54 || isCurrentlyPressed else { return nil }
+            return flags.contains(.maskCommand) && (keyCode == 54 || isCurrentlyPressed)
 
         case "rightoption":
-            isPressed = flags.contains(.maskAlternate) && (keyCode == 61 || isHotkeyCurrentlyPressed)
+            guard isFlagsChanged || keyCode == 61 else { return nil }
+            guard keyCode == 61 || isCurrentlyPressed else { return nil }
+            return flags.contains(.maskAlternate) && (keyCode == 61 || isCurrentlyPressed)
 
         case "rightcontrol":
-            isPressed = flags.contains(.maskControl) && (keyCode == 62 || isHotkeyCurrentlyPressed)
+            guard isFlagsChanged || keyCode == 62 else { return nil }
+            guard keyCode == 62 || isCurrentlyPressed else { return nil }
+            return flags.contains(.maskControl) && (keyCode == 62 || isCurrentlyPressed)
 
         case "ctrlspace":
             if keyCode == 49 && flags.contains(.maskControl) {
-                isPressed = isKeyDownEvent
-            } else if isHotkeyCurrentlyPressed {
-                isPressed = flags.contains(.maskControl)
+                return isKeyDownEvent
+            } else if isCurrentlyPressed {
+                return flags.contains(.maskControl)
+            } else {
+                return nil
             }
 
         case "optspace":
             if keyCode == 49 && flags.contains(.maskAlternate) {
-                isPressed = isKeyDownEvent
-            } else if isHotkeyCurrentlyPressed {
-                isPressed = flags.contains(.maskAlternate)
+                return isKeyDownEvent
+            } else if isCurrentlyPressed {
+                return flags.contains(.maskAlternate)
+            } else {
+                return nil
             }
 
         case "mouse4", "mouse5":
-            // Mouse buttons handled separately via handleMouseEvent
-            return
+            return nil
 
         default:
+            guard isFlagsChanged || keyCode == 63 else { return nil }
+            guard keyCode == 63 || isCurrentlyPressed else { return nil }
             let fnMask: UInt64 = 0x800000
-            let hasFnFlag = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
-            isPressed = hasFnFlag
+            return (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
+        }
+    }
+
+    private func handleKeyEvent(flags: CGEventFlags, keyCode: Int64, isFlagsChanged: Bool, isKeyDownEvent: Bool) {
+        let hotkeyType = configManager.config.hotkey.type
+        guard let isPressed = HotKeyMonitor.evaluateKeyIsPressed(
+            hotkeyType: hotkeyType,
+            flags: flags,
+            keyCode: keyCode,
+            isFlagsChanged: isFlagsChanged,
+            isKeyDownEvent: isKeyDownEvent,
+            isCurrentlyPressed: isHotkeyCurrentlyPressed
+        ) else {
+            return
         }
 
         if isPressed && !isHotkeyCurrentlyPressed {

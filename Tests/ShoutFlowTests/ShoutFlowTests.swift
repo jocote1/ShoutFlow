@@ -173,4 +173,65 @@ final class ShoutFlowTests: XCTestCase {
         ConfigManager.shared.setEnvKey(testKey, value: testVal)
         XCTAssertEqual(ConfigManager.shared.getEnv(testKey), testVal)
     }
+
+    func testArrowKeysDoNotTriggerFnHotkey() {
+        // macOS sets maskSecondaryFn (bit 23 / 0x800000) on all arrow keys (Left, Right, Up, Down), Page Up/Down, etc.
+        // We must ensure that Left Arrow (keyCode 123) and other arrow keys NEVER evaluate to pressing the Fn hotkey!
+        let arrowFlags = CGEventFlags(rawValue: 0x800000) // maskSecondaryFn
+
+        // Left Arrow keyDown (keyCode 123)
+        let leftArrowResult = HotKeyMonitor.evaluateKeyIsPressed(
+            hotkeyType: "fn",
+            flags: arrowFlags,
+            keyCode: 123,
+            isFlagsChanged: false,
+            isKeyDownEvent: true,
+            isCurrentlyPressed: false
+        )
+        XCTAssertNil(leftArrowResult, "Left Arrow keyDown should be ignored and never trigger Fn hotkey")
+
+        // Right Arrow keyDown (keyCode 124)
+        let rightArrowResult = HotKeyMonitor.evaluateKeyIsPressed(
+            hotkeyType: "fn",
+            flags: arrowFlags,
+            keyCode: 124,
+            isFlagsChanged: false,
+            isKeyDownEvent: true,
+            isCurrentlyPressed: false
+        )
+        XCTAssertNil(rightArrowResult, "Right Arrow keyDown should be ignored and never trigger Fn hotkey")
+
+        // Down Arrow keyDown (keyCode 125)
+        let downArrowResult = HotKeyMonitor.evaluateKeyIsPressed(
+            hotkeyType: "fn",
+            flags: arrowFlags,
+            keyCode: 125,
+            isFlagsChanged: false,
+            isKeyDownEvent: true,
+            isCurrentlyPressed: false
+        )
+        XCTAssertNil(downArrowResult, "Down Arrow keyDown should be ignored and never trigger Fn hotkey")
+
+        // Real Fn Key (keyCode 63, flagsChanged) SHOULD evaluate to pressed: true
+        let realFnResult = HotKeyMonitor.evaluateKeyIsPressed(
+            hotkeyType: "fn",
+            flags: arrowFlags,
+            keyCode: 63,
+            isFlagsChanged: true,
+            isKeyDownEvent: false,
+            isCurrentlyPressed: false
+        )
+        XCTAssertEqual(realFnResult, true, "Physical Fn key press (keyCode 63, flagsChanged) should trigger hotkey")
+
+        // Real Fn Key release (keyCode 63, flagsChanged, no fn flag) SHOULD evaluate to pressed: false
+        let realFnReleaseResult = HotKeyMonitor.evaluateKeyIsPressed(
+            hotkeyType: "fn",
+            flags: CGEventFlags(),
+            keyCode: 63,
+            isFlagsChanged: true,
+            isKeyDownEvent: false,
+            isCurrentlyPressed: true
+        )
+        XCTAssertEqual(realFnReleaseResult, false, "Physical Fn key release should evaluate to false")
+    }
 }
