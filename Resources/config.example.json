@@ -1,0 +1,32 @@
+{
+  "hotkey": {
+    "type": "fn",
+    "doubleTapThresholdMs": 350
+  },
+  "handsFree": {
+    "autoStopTimeoutSeconds": 300
+  },
+  "transcription": {
+    "provider": "local",
+    "localWhisperBinary": "/opt/homebrew/bin/whisper-cli",
+    "localModelPath": "~/.config/shoutflow/models/ggml-small.bin",
+    "language": "auto",
+    "groqModel": "whisper-large-v3-turbo",
+    "openaiModel": "gpt-4o-transcribe"
+  },
+  "llm": {
+    "enabled": true,
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "systemPrompt": "You are an expert dictation assistant.\nTake the raw speech transcript and output a refined, natural text:\n1. Remove verbal fillers and hesitation sounds (such as \"um\", \"uh\", \"like\", \"you know\", \"er\", \"ah\").\n2. Correct punctuation, capitalization, contractions, and sentence boundaries.\n3. Format numbers, dates, currency, and bulleted lists when appropriate.\n4. Match casing and style to smooth dictation.\n5. Strictly preserve the original meaning, tone, intent, and terminology.\n6. Output ONLY the polished dictation text without any preamble, explanation, or quotes."
+  },
+  "insertion": {
+    "method": "paste",
+    "restoreClipboard": false,
+    "pasteDelayMs": 50
+  },
+  "ui": {
+    "showFloatingPill": true,
+    "pillPosition": "bottom"
+  }
+}
