@@ -24,9 +24,11 @@ public final class HotKeyMonitor {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var globalMonitor: Any?
+    private var localMonitor: Any?
+    private var retryTimer: Timer?
 
     private var state: MonitorState = .idle
-    private var isFnCurrentlyPressed = false
+    private var isHotkeyCurrentlyPressed = false
     private var doubleTapWorkItem: DispatchWorkItem?
     private var handsFreeTimer: Timer?
     private var handsFreeElapsedSeconds = 0
@@ -42,7 +44,8 @@ public final class HotKeyMonitor {
     public func start() {
         stop()
         setupEventTap()
-        setupGlobalMonitorFallback()
+        setupNSEventMonitors()
+        startPermissionRetryTimer()
     }
 
     public func stop() {
@@ -59,6 +62,13 @@ public final class HotKeyMonitor {
             NSEvent.removeMonitor(monitor)
             globalMonitor = nil
         }
+        if let monitor = localMonitor {
+            NSEvent.removeMonitor(monitor)
+            localMonitor = nil
+        }
+
+        retryTimer?.invalidate()
+        retryTimer = nil
 
         cancelTimers()
         state = .idle
@@ -78,12 +88,27 @@ public final class HotKeyMonitor {
     public func setIdleState() {
         cancelTimers()
         state = .idle
-        isFnCurrentlyPressed = false
+        isHotkeyCurrentlyPressed = false
+    }
+
+    // MARK: - Auto-Reconnect Timer for Accessibility
+
+    private func startPermissionRetryTimer() {
+        guard retryTimer == nil else { return }
+        retryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if self.eventTap == nil && Permissions.isAccessibilityGranted {
+                AppLogger.shared.log("[HotKey] Accessibility granted! Reconnecting CGEvent.tapCreate...")
+                self.setupEventTap()
+            }
+        }
     }
 
     // MARK: - Event Tap Setup
 
-    private func setupEventTap() {
+    public func setupEventTap() {
+        guard eventTap == nil else { return }
+
         let eventMask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue) |
                                     (1 << CGEventType.keyDown.rawValue) |
                                     (1 << CGEventType.keyUp.rawValue)
@@ -104,7 +129,7 @@ public final class HotKeyMonitor {
             },
             userInfo: observer
         ) else {
-            print("[ShoutFlow] Note: CGEvent.tapCreate requires Accessibility permissions. Falling back to global NSEvent monitor.")
+            AppLogger.shared.log("[HotKey] CGEvent.tapCreate pending Accessibility permission. Using NSEvent monitors.")
             return
         }
 
@@ -113,15 +138,20 @@ public final class HotKeyMonitor {
         self.runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        AppLogger.shared.log("[HotKey] CGEvent.tapCreate successfully connected with Accessibility!")
     }
 
-    private func setupGlobalMonitorFallback() {
-        guard globalMonitor == nil else { return }
-
-        // Global monitor for modifier flags and passive key down
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
-            guard let self = self else { return }
-            self.handleNSEvent(event)
+    private func setupNSEventMonitors() {
+        if globalMonitor == nil {
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+                self?.handleNSEvent(event)
+            }
+        }
+        if localMonitor == nil {
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+                self?.handleNSEvent(event)
+                return event
+            }
         }
     }
 
@@ -142,16 +172,15 @@ public final class HotKeyMonitor {
                 DispatchQueue.main.async { [weak self] in
                     self?.handleEscPressed()
                 }
-                // ALWAYS return unchanged so Esc reaches the active app!
                 return Unmanaged.passRetained(event)
             }
         }
 
-        // 2. Modifier Hotkey Monitoring (Fn or other modifiers)
-        if type == .flagsChanged {
+        // 2. Modifier Hotkey Monitoring
+        if type == .flagsChanged || type == .keyDown || type == .keyUp {
             let flags = event.flags
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            handleModifierChange(flags: flags, keyCode: keyCode)
+            handleKeyEvent(flags: flags, keyCode: keyCode, isKeyDownEvent: (type == .keyDown))
         }
 
         return Unmanaged.passRetained(event)
@@ -160,58 +189,79 @@ public final class HotKeyMonitor {
     private func handleNSEvent(_ event: NSEvent) {
         if event.type == .keyDown && event.keyCode == 53 {
             handleEscPressed()
-        } else if event.type == .flagsChanged {
+        } else if event.type == .flagsChanged || event.type == .keyDown {
             let cgFlags = CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue))
-            handleModifierChange(flags: cgFlags, keyCode: Int64(event.keyCode))
+            handleKeyEvent(flags: cgFlags, keyCode: Int64(event.keyCode), isKeyDownEvent: (event.type == .keyDown))
         }
     }
 
     private func handleEscPressed() {
         switch state {
         case .holding, .waitingForDoubleTap, .handsFree:
+            AppLogger.shared.log("[HotKey] Esc pressed: canceling active recording")
             cancelTimers()
             state = .idle
-            isFnCurrentlyPressed = false
+            isHotkeyCurrentlyPressed = false
             delegate?.hotKeyDidCancel()
         case .transcribing:
+            AppLogger.shared.log("[HotKey] Esc pressed: aborting in-flight transcription")
             cancelTimers()
             state = .idle
-            isFnCurrentlyPressed = false
+            isHotkeyCurrentlyPressed = false
             delegate?.hotKeyDidCancel()
         case .idle:
             break
         }
     }
 
-    private func handleModifierChange(flags: CGEventFlags, keyCode: Int64) {
+    private func handleKeyEvent(flags: CGEventFlags, keyCode: Int64, isKeyDownEvent: Bool) {
         let hotkeyType = configManager.config.hotkey.type.lowercased()
 
-        let isPressed: Bool
-        if hotkeyType == "fn" {
-            // Check secondary Fn mask (0x800000 / maskSecondaryFn) or function modifier
+        var isPressed = false
+
+        switch hotkeyType {
+        case "fn":
+            // Check secondary Fn mask (0x800000), keyCode 63, or function modifier
             let fnMask: UInt64 = 0x800000
-            isPressed = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
-        } else if hotkeyType == "rightcommand" {
+            let hasFnFlag = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
+            isPressed = hasFnFlag || (keyCode == 63 && hasFnFlag)
+
+        case "rightcommand":
             isPressed = (keyCode == 54) && flags.contains(.maskCommand)
-        } else if hotkeyType == "rightoption" {
+
+        case "rightoption":
             isPressed = (keyCode == 61) && flags.contains(.maskAlternate)
-        } else if hotkeyType == "rightcontrol" {
+
+        case "rightcontrol":
             isPressed = (keyCode == 62) && flags.contains(.maskControl)
-        } else {
+
+        case "ctrlspace":
+            // Control (flags) + Space (keycode 49)
+            if keyCode == 49 && flags.contains(.maskControl) {
+                isPressed = isKeyDownEvent
+            }
+
+        case "optspace":
+            // Option (flags) + Space (keycode 49)
+            if keyCode == 49 && flags.contains(.maskAlternate) {
+                isPressed = isKeyDownEvent
+            }
+
+        default:
             // Default to Fn
             let fnMask: UInt64 = 0x800000
-            isPressed = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
+            isPressed = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn) || keyCode == 63
         }
 
-        if isPressed && !isFnCurrentlyPressed {
-            // Key Down Transition
-            isFnCurrentlyPressed = true
+        if isPressed && !isHotkeyCurrentlyPressed {
+            isHotkeyCurrentlyPressed = true
+            AppLogger.shared.log("[HotKey] Hotkey pressed down (type: \(hotkeyType), keyCode: \(keyCode))")
             DispatchQueue.main.async { [weak self] in
                 self?.onHotkeyDown()
             }
-        } else if !isPressed && isFnCurrentlyPressed {
-            // Key Up Transition
-            isFnCurrentlyPressed = false
+        } else if !isPressed && isHotkeyCurrentlyPressed {
+            isHotkeyCurrentlyPressed = false
+            AppLogger.shared.log("[HotKey] Hotkey released (type: \(hotkeyType))")
             DispatchQueue.main.async { [weak self] in
                 self?.onHotkeyUp()
             }
@@ -223,17 +273,14 @@ public final class HotKeyMonitor {
     private func onHotkeyDown() {
         switch state {
         case .idle:
-            // First press: start holding mode
             state = .holding(startTime: Date())
             delegate?.hotKeyDidBeginHold()
 
         case .waitingForDoubleTap:
-            // Second press within window! Double tap confirmed!
             cancelTimers()
             startHandsFreeSession()
 
         case .handsFree:
-            // Tapping again while in hands-free stops the session!
             stopHandsFreeSession()
 
         case .holding, .transcribing:
@@ -249,17 +296,14 @@ public final class HotKeyMonitor {
         case .holding(let startTime):
             let duration = Date().timeIntervalSince(startTime)
             if duration >= thresholdSec {
-                // Held longer than double-tap threshold: definitive hold-and-release!
                 state = .transcribing
                 delegate?.hotKeyDidReleaseHold()
             } else {
-                // Quick tap: wait briefly to see if a second tap occurs (for hands-free)
                 state = .waitingForDoubleTap(firstReleaseTime: Date())
 
                 let workItem = DispatchWorkItem { [weak self] in
                     guard let self = self else { return }
                     if case .waitingForDoubleTap = self.state {
-                        // Double tap did not happen. Treat as single quick tap release!
                         self.state = .transcribing
                         self.delegate?.hotKeyDidReleaseHold()
                     }
@@ -281,14 +325,13 @@ public final class HotKeyMonitor {
 
         let maxSeconds = configManager.config.handsFree.autoStopTimeoutSeconds
 
-        // Timer that ticks every second and auto-stops at maxSeconds
         handsFreeTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             self.handsFreeElapsedSeconds += 1
             self.delegate?.handsFreeTimerDidTick(elapsedSeconds: self.handsFreeElapsedSeconds, maxSeconds: maxSeconds)
 
             if self.handsFreeElapsedSeconds >= maxSeconds {
-                print("[ShoutFlow] Hands-free auto-stop timer reached 5 minutes limit.")
+                AppLogger.shared.log("[HotKey] Hands-free auto-stop safety timer reached \(maxSeconds) seconds")
                 self.stopHandsFreeSession()
             }
         }

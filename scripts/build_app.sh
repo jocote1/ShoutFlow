@@ -26,14 +26,23 @@ if [[ ! -f "${HOME}/.config/shoutflow/config.json" ]]; then
     cp "${PROJECT_DIR}/Resources/config.example.json" "${HOME}/.config/shoutflow/config.json"
 fi
 
-echo "🔏 Ad-hoc code signing the application bundle..."
-codesign --force --deep --sign - "${APP_BUNDLE}"
+# Detect valid Apple Development identity
+SIGN_IDENTITY=$(security find-identity -p codesigning -v | grep "Apple Development" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+
+if [[ -n "${SIGN_IDENTITY}" ]]; then
+    echo "🔏 Signing bundle with Apple Development certificate: ${SIGN_IDENTITY}..."
+    codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_BUNDLE}"
+else
+    echo "🔏 Signing with ad-hoc identity & persistent designated requirement..."
+    codesign --force --deep --sign - -r='designated => identifier "no.hnhvgs.ShoutFlow"' "${APP_BUNDLE}"
+fi
+
+echo "📲 Installing to /Applications/ShoutFlow.app..."
+rm -rf "/Applications/ShoutFlow.app"
+cp -R "${APP_BUNDLE}" "/Applications/ShoutFlow.app"
 
 echo ""
-echo "✅ ShoutFlow.app built successfully at: ${APP_BUNDLE}"
+echo "✅ ShoutFlow.app built and installed to /Applications/ShoutFlow.app"
 echo ""
-echo "To install to your Applications folder:"
-echo "  cp -R \"${APP_BUNDLE}\" /Applications/"
-echo ""
-echo "To launch right now:"
-echo "  open \"${APP_BUNDLE}\""
+echo "To launch ShoutFlow:"
+echo "  open /Applications/ShoutFlow.app"

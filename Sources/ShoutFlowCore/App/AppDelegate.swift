@@ -2,15 +2,19 @@ import AppKit
 import AVFoundation
 
 public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDelegate, StatusBarMenuDelegate {
-    private var statusBarMenu: StatusBarMenu!
-    private var hotKeyMonitor: HotKeyMonitor!
-    private var pillWindow: FloatingPillWindowController!
+    public static private(set) var shared: AppDelegate?
+
+    public private(set) var statusBarMenu: StatusBarMenu!
+    public private(set) var hotKeyMonitor: HotKeyMonitor!
+    public private(set) var pillWindow: FloatingPillWindowController!
 
     private var currentTranscriptionService: TranscriptionService?
     private var currentLLMService: LLMService?
     private var activeProcessingTask: Task<Void, Never>?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
+
         // Hide dock icon (agent app / LSUIElement)
         NSApp.setActivationPolicy(.accessory)
 
@@ -24,26 +28,44 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
 
         setupServices()
 
-        // Permissions check on first launch
-        checkInitialPermissions()
+        AppLogger.shared.log("ShoutFlow started. Config dir: \(ConfigManager.configDirectory.path)")
+        AppLogger.shared.log("Accessibility granted: \(Permissions.isAccessibilityGranted), Microphone granted: \(Permissions.isMicrophoneGranted)")
 
-        print("[ShoutFlow] ShoutFlow is running in background. Hold Fn to talk, double-tap Fn for hands-free, Esc to cancel.")
+        // Permissions check and prompt on first launch
+        checkInitialPermissions()
     }
 
-    private func setupServices() {
+    public func setupServices() {
         let config = ConfigManager.shared.config
         currentTranscriptionService = TranscriptionServiceFactory.makeService(for: config.transcription)
         currentLLMService = LLMService(config: config.llm)
+        AppLogger.shared.log("Services configured: Provider=\(config.transcription.provider), Model=\(config.transcription.localModelPath), LLM=\(config.llm.enabled)")
     }
 
     private func checkInitialPermissions() {
         if !Permissions.isAccessibilityGranted {
+            AppLogger.shared.log("Requesting Accessibility permission...")
             Permissions.requestAccessibility()
         }
         if !Permissions.isMicrophoneGranted {
+            AppLogger.shared.log("Requesting Microphone permission...")
             Permissions.requestMicrophone { granted in
-                print("[ShoutFlow] Microphone permission status: \(granted)")
+                AppLogger.shared.log("Microphone permission granted: \(granted)")
             }
+        }
+    }
+
+    // MARK: - Manual / Test Dictation Trigger
+
+    public func toggleManualDictation() {
+        if AudioRecorder.shared.isRecording {
+            AppLogger.shared.log("[Manual] Stopping manual recording session...")
+            processRecordingAndPaste()
+            statusBarMenu.setManualRecordingState(isRecording: false)
+        } else {
+            AppLogger.shared.log("[Manual] Starting manual recording session...")
+            hotKeyDidBeginHold()
+            statusBarMenu.setManualRecordingState(isRecording: true)
         }
     }
 
@@ -56,12 +78,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
         cancelCurrentOperation(notifyPill: false)
 
         do {
-            _ = try AudioRecorder.shared.startRecording()
+            let fileURL = try AudioRecorder.shared.startRecording()
+            AppLogger.shared.log("[Audio] Recording started -> \(fileURL.lastPathComponent)")
             if ConfigManager.shared.config.ui.showFloatingPill {
                 pillWindow.updateState(.holdToTalk)
             }
         } catch {
-            print("[ShoutFlow] Failed to start audio recording: \(error.localizedDescription)")
+            AppLogger.shared.log("[Audio] Failed to start audio recording: \(error.localizedDescription)")
             hotKeyMonitor.setIdleState()
         }
     }
@@ -77,8 +100,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
         if !AudioRecorder.shared.isRecording {
             do {
                 _ = try AudioRecorder.shared.startRecording()
+                AppLogger.shared.log("[Audio] Hands-free recording started")
             } catch {
-                print("[ShoutFlow] Failed to start audio recording for hands-free: \(error.localizedDescription)")
+                AppLogger.shared.log("[Audio] Failed to start audio recording for hands-free: \(error.localizedDescription)")
                 hotKeyMonitor.setIdleState()
                 return
             }
@@ -103,18 +127,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     }
 
     public func hotKeyDidCancel() {
-        print("[ShoutFlow] Esc pressed: Canceling ongoing recording or transcription.")
+        AppLogger.shared.log("[Pipeline] Operation cancelled via Esc")
         cancelCurrentOperation(notifyPill: true)
     }
 
     // MARK: - Pipeline: Record -> Transcribe -> LLM Clean -> Paste
 
     private func processRecordingAndPaste() {
+        statusBarMenu.setManualRecordingState(isRecording: false)
+
         guard let audioURL = AudioRecorder.shared.stopRecording() else {
             hotKeyMonitor.setIdleState()
             pillWindow.updateState(.hidden)
             return
         }
+
+        AppLogger.shared.log("[Audio] Recording stopped. Beginning transcription pipeline...")
 
         if ConfigManager.shared.config.ui.showFloatingPill {
             pillWindow.updateState(.transcribing)
@@ -127,7 +155,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
             guard let self = self else { return }
 
             defer {
-                // Cleanup temp audio file
                 try? FileManager.default.removeItem(at: audioURL)
                 Task { @MainActor in
                     self.hotKeyMonitor.setIdleState()
@@ -140,18 +167,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
                 }
 
                 // 1. Transcribe audio
+                AppLogger.shared.log("[Pipeline] Transcribing audio with \(ConfigManager.shared.config.transcription.provider)...")
                 let rawTranscript = try await service.transcribe(audioFileURL: audioURL)
                 let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 guard !trimmed.isEmpty else {
-                    print("[ShoutFlow] Transcript was empty. Nothing to insert.")
+                    AppLogger.shared.log("[Pipeline] Transcript was empty (no speech detected).")
                     await MainActor.run {
                         self.pillWindow.updateState(.hidden)
                     }
                     return
                 }
 
-                print("[ShoutFlow] Raw Transcript: \(trimmed)")
+                AppLogger.shared.log("[Pipeline] Raw Transcript: \"\(trimmed)\"")
 
                 // 2. LLM Post-Processing (filler removal, punctuation, casing)
                 let cleanedText: String
@@ -159,14 +187,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
                     await MainActor.run {
                         self.pillWindow.updateState(.cleaning)
                     }
+                    AppLogger.shared.log("[Pipeline] Refining transcript with LLM (\(ConfigManager.shared.config.llm.provider))...")
                     cleanedText = await llm.cleanTranscript(trimmed)
                 } else {
                     cleanedText = trimmed
                 }
 
-                print("[ShoutFlow] Cleaned Output: \(cleanedText)")
+                AppLogger.shared.log("[Pipeline] Final Cleaned Output: \"\(cleanedText)\"")
 
-                // Check if cancelled before pasting
                 try Task.checkCancellation()
 
                 // 3. Insert into active app (via Pasteboard + Cmd-V or Keystrokes)
@@ -176,13 +204,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
                         self.pillWindow.updateState(.done)
                     }
                 }
+                AppLogger.shared.log("[Pipeline] Successfully inserted text!")
             } catch is CancellationError {
-                print("[ShoutFlow] Task was cancelled.")
+                AppLogger.shared.log("[Pipeline] Task cancelled.")
                 await MainActor.run {
                     self.pillWindow.updateState(.canceled)
                 }
             } catch {
-                print("[ShoutFlow] Transcription error: \(error.localizedDescription)")
+                AppLogger.shared.log("[Pipeline] Error: \(error.localizedDescription)")
                 await MainActor.run {
                     self.pillWindow.updateState(.canceled)
                 }
@@ -197,6 +226,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
         activeProcessingTask?.cancel()
         activeProcessingTask = nil
         hotKeyMonitor.setIdleState()
+        statusBarMenu.setManualRecordingState(isRecording: false)
 
         if notifyPill && ConfigManager.shared.config.ui.showFloatingPill {
             pillWindow.updateState(.canceled)
@@ -208,6 +238,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     // MARK: - StatusBarMenuDelegate
 
     public func statusBarDidToggleEnabled(_ isEnabled: Bool) {
+        AppLogger.shared.log("ShoutFlow enabled state changed to: \(isEnabled)")
         if !isEnabled {
             cancelCurrentOperation(notifyPill: true)
         }

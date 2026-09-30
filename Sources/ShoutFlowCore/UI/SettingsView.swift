@@ -106,6 +106,8 @@ public struct SettingsView: View {
                     Text("Right Command (⌘)").tag("rightcommand")
                     Text("Right Option (⌥)").tag("rightoption")
                     Text("Right Control (⌃)").tag("rightcontrol")
+                    Text("Control + Space (⌃Space)").tag("ctrlspace")
+                    Text("Option + Space (⌥Space)").tag("optspace")
                 }
                 .pickerStyle(.menu)
 
@@ -134,6 +136,24 @@ public struct SettingsView: View {
                 Text("Safety limit to prevent endless recording if forgotten.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+
+            Section(header: Text("Test Voice Dictation").bold()) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Instant Test Dictation").font(.subheadline).bold()
+                        Text("Click to record a test phrase and verify the pipeline without a hotkey.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button(action: {
+                        AppDelegate.shared?.toggleManualDictation()
+                    }) {
+                        Label(AudioRecorder.shared.isRecording ? "Stop & Paste" : "Start Test Dictation", systemImage: AudioRecorder.shared.isRecording ? "stop.circle.fill" : "mic.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             }
 
             Section(header: Text("Text Insertion & Clipboard").bold()) {
@@ -427,6 +447,29 @@ public struct SettingsView: View {
                     refreshPermissionStatus()
                 }
             }
+
+            Section(header: Text("Troubleshooting macOS Accessibility").bold()) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("If macOS System Settings shows ShoutFlow as enabled, but the app still reports Missing:")
+                        .font(.subheadline)
+                    Text("1. Open System Settings → Accessibility.\n2. Select 'ShoutFlow' and click the minus (-) button to remove it.\n3. Click (+) and re-add ShoutFlow from your Applications folder.\n4. Click 'Re-request Permission' below.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack(spacing: 12) {
+                    Button("Re-request Accessibility") {
+                        Permissions.requestAccessibility()
+                        refreshPermissionStatus()
+                    }
+                    .controlSize(.small)
+
+                    Button("Open Debug Logs (shoutflow.log)") {
+                        NSWorkspace.shared.open(AppLogger.logFileURL)
+                    }
+                    .controlSize(.small)
+                }
+            }
         }
         .formStyle(.grouped)
     }
@@ -437,6 +480,12 @@ public struct SettingsView: View {
         HStack {
             Button("Open Config Folder") {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: ConfigManager.configDirectory.path)
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+
+            Button("View Logs") {
+                NSWorkspace.shared.open(AppLogger.logFileURL)
             }
             .buttonStyle(.link)
             .font(.caption)

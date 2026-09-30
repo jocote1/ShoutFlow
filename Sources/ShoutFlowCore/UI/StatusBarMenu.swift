@@ -13,6 +13,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
     public private(set) var isEnabled = true
 
     private var enabledMenuItem: NSMenuItem!
+    private var manualDictateItem: NSMenuItem!
     private var localWhisperItem: NSMenuItem!
     private var groqWhisperItem: NSMenuItem!
     private var openaiWhisperItem: NSMenuItem!
@@ -62,6 +63,11 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         enabledMenuItem.state = isEnabled ? .on : .off
         menu.addItem(enabledMenuItem)
 
+        // Manual / Test Dictation Trigger
+        manualDictateItem = NSMenuItem(title: "🎙️ Start Dictation (Manual / Test)", action: #selector(toggleManualDictation), keyEquivalent: "d")
+        manualDictateItem.target = self
+        menu.addItem(manualDictateItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // Engine Submenu
@@ -85,7 +91,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
 
         // Hotkey Display
         let hotkeyType = ConfigManager.shared.config.hotkey.type
-        let hotkeyItem = NSMenuItem(title: "Hotkey: \(hotkeyType.capitalized) (Hold to talk · 2x Hands-Free)", action: #selector(openConfig), keyEquivalent: "")
+        let hotkeyItem = NSMenuItem(title: "Hotkey: \(hotkeyType.capitalized) (Hold to talk · 2x Hands-Free)", action: #selector(openSettingsWindow), keyEquivalent: "")
         hotkeyItem.target = self
         menu.addItem(hotkeyItem)
 
@@ -101,6 +107,10 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         modelStatusItem.target = self
         menu.addItem(modelStatusItem)
 
+        let logItem = NSMenuItem(title: "View Debug Logs (shoutflow.log)...", action: #selector(openLogFile), keyEquivalent: "")
+        logItem.target = self
+        menu.addItem(logItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // Launch at login
@@ -113,6 +123,10 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         let permItem = NSMenuItem(title: "Check System Permissions...", action: #selector(checkPermissions), keyEquivalent: "")
         permItem.target = self
         menu.addItem(permItem)
+
+        let fixPermItem = NSMenuItem(title: "Fix / Reset Accessibility...", action: #selector(resetAccessibilityAndPrompt), keyEquivalent: "")
+        fixPermItem.target = self
+        menu.addItem(fixPermItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -239,6 +253,52 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
             }
         } else if resp == .alertThirdButtonReturn {
             Permissions.openMicrophoneSettings()
+        }
+    }
+
+    public func setManualRecordingState(isRecording: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            if isRecording {
+                self?.manualDictateItem.title = "⏹️ Stop Dictation & Paste"
+            } else {
+                self?.manualDictateItem.title = "🎙️ Start Dictation (Manual / Test)"
+            }
+        }
+    }
+
+    @objc private func toggleManualDictation() {
+        AppDelegate.shared?.toggleManualDictation()
+    }
+
+    @objc private func openLogFile() {
+        let url = AppLogger.logFileURL
+        if !FileManager.default.fileExists(atPath: url.path) {
+            AppLogger.shared.log("Log initialized.")
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func resetAccessibilityAndPrompt() {
+        let alert = NSAlert()
+        alert.messageText = "Fix macOS Accessibility"
+        alert.informativeText = """
+        If macOS System Settings shows ShoutFlow as enabled but dictation still does not respond:
+
+        1. Open System Settings → Privacy & Security → Accessibility.
+        2. Click on 'ShoutFlow' and click the minus (-) button to remove it.
+        3. Click the (+) button and re-add ShoutFlow from your Applications folder.
+
+        Click 'Open System Settings' below to open the settings pane now.
+        """
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Request Permission Now")
+        alert.addButton(withTitle: "Cancel")
+
+        let resp = alert.runModal()
+        if resp == .alertFirstButtonReturn {
+            Permissions.openAccessibilitySettings()
+        } else if resp == .alertSecondButtonReturn {
+            Permissions.requestAccessibility()
         }
     }
 
