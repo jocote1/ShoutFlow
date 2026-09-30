@@ -236,6 +236,27 @@ public final class ConfigManager {
         }
     }
 
+    public func setEnvKey(_ key: String, value: String) {
+        env[key] = value
+        saveEnv()
+    }
+
+    public func saveEnv() {
+        ensureDirectoriesExist()
+        var lines: [String] = [
+            "# ShoutFlow Environment Configuration",
+            "# Updated via ShoutFlow Settings Window",
+            ""
+        ]
+        for (k, v) in env.sorted(by: { $0.key < $1.key }) {
+            if !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                lines.append("\(k)=\(v)")
+            }
+        }
+        let content = lines.joined(separator: "\n") + "\n"
+        try? content.write(to: ConfigManager.envFileURL, atomically: true, encoding: .utf8)
+    }
+
     public func saveConfig(_ newConfig: ShoutFlowConfig? = nil) {
         if let newConfig = newConfig {
             self.config = newConfig

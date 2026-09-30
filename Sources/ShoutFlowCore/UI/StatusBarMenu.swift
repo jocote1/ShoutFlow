@@ -91,18 +91,15 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Config actions
-        let configItem = NSMenuItem(title: "Open Settings (config.json)...", action: #selector(openConfig), keyEquivalent: ",")
-        configItem.target = self
-        menu.addItem(configItem)
+        // Settings Window
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettingsWindow), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
-        let envItem = NSMenuItem(title: "Open Environment (.env)...", action: #selector(openEnv), keyEquivalent: "")
-        envItem.target = self
-        menu.addItem(envItem)
-
-        let downloadModelItem = NSMenuItem(title: "Download Local Whisper Model...", action: #selector(downloadModelPrompt), keyEquivalent: "")
-        downloadModelItem.target = self
-        menu.addItem(downloadModelItem)
+        // Local Models Management & Confirmation
+        let modelStatusItem = NSMenuItem(title: "Local Models & Downloads...", action: #selector(showModelStatusAndDownload), keyEquivalent: "")
+        modelStatusItem.target = self
+        menu.addItem(modelStatusItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -166,49 +163,44 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         delegate?.statusBarDidChangeProvider("openai")
     }
 
+    @objc private func openSettingsWindow() {
+        SettingsWindowController.shared.showSettingsWindow()
+    }
+
     @objc private func openConfig() {
-        let url = ConfigManager.configFileURL
-        if !FileManager.default.fileExists(atPath: url.path) {
-            ConfigManager.shared.saveConfig()
-        }
-        NSWorkspace.shared.open(url)
+        openSettingsWindow()
     }
 
-    @objc private func openEnv() {
-        let url = ConfigManager.envFileURL
-        if !FileManager.default.fileExists(atPath: url.path) {
-            try? "".write(to: url, atomically: true, encoding: .utf8)
-        }
-        NSWorkspace.shared.open(url)
-    }
+    @objc private func showModelStatusAndDownload() {
+        let models = ModelManager.availableModels
+        let installed = models.filter { $0.isInstalled }
 
-    @objc private func downloadModelPrompt() {
         let alert = NSAlert()
-        alert.messageText = "Download Whisper Model"
-        alert.informativeText = "ShoutFlow supports whisper.cpp with small and medium models for fast, offline transcription.\n\nWould you like to download the small model (~460MB)?"
-        alert.addButton(withTitle: "Download Small Model")
-        alert.addButton(withTitle: "Download Medium Model")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = "Local Whisper Models"
 
-        let resp = alert.runModal()
-        if resp == .alertFirstButtonReturn {
-            downloadModel("small")
-        } else if resp == .alertSecondButtonReturn {
-            downloadModel("medium")
-        }
-    }
-
-    private func downloadModel(_ model: String) {
-        let modelsDir = ConfigManager.modelsDirectory
-        try? FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
-        let targetFile = modelsDir.appendingPathComponent("ggml-\(model).bin")
-
-        let urlStr = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-\(model).bin"
-
-        let terminalCmd = "curl -L '\(urlStr)' -o '\(targetFile.path)' && echo 'Download complete! Model saved to \(targetFile.path)'"
-        let script = "tell application \"Terminal\" to do script \"\(terminalCmd)\""
-        if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(nil)
+        if installed.isEmpty {
+            alert.informativeText = "No local whisper models are installed yet.\n\nOpen Settings to download the recommended 'small' model (~461 MB) for fast, offline transcription."
+            alert.addButton(withTitle: "Open Settings")
+            alert.addButton(withTitle: "Cancel")
+            let resp = alert.runModal()
+            if resp == .alertFirstButtonReturn {
+                openSettingsWindow()
+            }
+        } else {
+            var info = "Installed Models:\n"
+            for m in installed {
+                let isActive = ModelManager.shared.isModelActive(m)
+                let tag = isActive ? " [ACTIVE]" : ""
+                info += "• \(m.name) (\(m.diskSizeString ?? m.estimatedSize))\(tag)\n"
+            }
+            info += "\nOffline local dictation is ready to use!"
+            alert.informativeText = info
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Open Settings...")
+            let resp = alert.runModal()
+            if resp == .alertSecondButtonReturn {
+                openSettingsWindow()
+            }
         }
     }
 

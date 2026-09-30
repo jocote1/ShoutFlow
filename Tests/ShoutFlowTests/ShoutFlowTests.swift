@@ -122,4 +122,30 @@ final class ShoutFlowTests: XCTestCase {
         }
         wait(for: [exp], timeout: 2.0)
     }
+
+    func testModelManagerDetectionAndActivation() {
+        let models = ModelManager.availableModels
+        XCTAssertGreaterThan(models.count, 2)
+
+        // Find small model
+        guard let small = models.first(where: { $0.id == "small" }) else {
+            XCTFail("Small model should exist in available models")
+            return
+        }
+
+        XCTAssertTrue(small.isInstalled, "Small model was downloaded and should be marked as installed")
+        XCTAssertNotNil(small.diskSizeString)
+
+        // Test activation
+        ModelManager.shared.setActiveModel(small)
+        XCTAssertTrue(ModelManager.shared.isModelActive(small))
+    }
+
+    func testEnvKeySavingAndLoading() {
+        let testKey = "TEST_API_KEY_\(UUID().uuidString.prefix(6))"
+        let testVal = "secret_12345"
+
+        ConfigManager.shared.setEnvKey(testKey, value: testVal)
+        XCTAssertEqual(ConfigManager.shared.getEnv(testKey), testVal)
+    }
 }

@@ -12,12 +12,14 @@ ShoutFlow runs quietly in the background as a menu bar app. It provides instant 
 - **Double-Tap Hands-Free Session**: Double-tap `fn` to enter a hands-free recording session without holding any key. Tap once more to stop and paste.
 - **5-Minute Safety Limit**: Hands-free sessions automatically stop after 5 minutes so forgotten recordings never run indefinitely.
 - **Passive `Esc` Cancellation**: Press `Esc` anytime to cancel an active recording or abort an in-flight transcription. Esc is monitored passively so it still reaches your active application (e.g. Vim, browser, modals).
+- **Native Settings Window (`Cmd+,`)**: A macOS SwiftUI settings window with tabs for General, Transcription, AI Polish & API Keys, and Permissions. Put in API keys securely, customize prompts, switch engines, and adjust sliders with live updates.
+- **In-App Local Model Manager & Confirmation**: Download, verify, and switch local Whisper GGML models directly from the Settings window or Menu Bar with real-time download progress and completion confirmation alerts.
 - **Offline & Private (whisper.cpp)**: Fast local transcription powered by `whisper.cpp` with Apple Silicon Metal GPU acceleration (`arm64`). No internet required.
 - **Cloud Whisper API Support**: Toggle between local whisper.cpp, Groq Whisper (ultra-fast <300ms), or OpenAI Whisper (`gpt-4o-transcribe` / `whisper-1`) with a config flag or menu bar toggle.
 - **AI Transcript Polishing**: Pipes raw transcripts through an LLM to eliminate filler words (*"um"*, *"uh"*, *"like"*), correct punctuation, and match casing to natural dictation style.
 - **Direct Cursor Insertion**: Pastes text directly at the cursor using simulated `Cmd+V` (or keystrokes). Leaves the text on your clipboard so you can paste it again, with a config flag to restore your previous clipboard instead.
 - **Dynamic Floating Pill HUD**: A sleek, dark glassmorphism floating pill that displays live audio waveforms, active mode, elapsed countdown, and transcription status.
-- **Menu Bar Controls**: Toggle ShoutFlow on/off, switch engines, configure settings, download models, and enable Launch at Login.
+- **Menu Bar Controls**: Toggle ShoutFlow on/off, switch engines, open Settings window (`Cmd+,`), view installed models, and enable Launch at Login.
 - **No Accounts, No Telemetry**: Zero analytics, zero accounts, pure local control.
 
 ---
