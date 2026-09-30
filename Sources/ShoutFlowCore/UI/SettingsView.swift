@@ -8,6 +8,8 @@ public struct SettingsView: View {
     // Form state initialized from ConfigManager
     @State private var hotkeyType: String
     @State private var doubleTapMs: Double
+    @State private var tripleTapToCancel: Bool
+    @State private var soundEffectsEnabled: Bool
     @State private var autoStopMinutes: Int
     @State private var insertionMethod: String
     @State private var restoreClipboard: Bool
@@ -23,6 +25,7 @@ public struct SettingsView: View {
     @State private var llmEnabled: Bool
     @State private var llmProvider: String
     @State private var llmModel: String
+    @State private var bypassShortPhrases: Bool
     @State private var systemPrompt: String
     @State private var groqApiKey: String
     @State private var openaiApiKey: String
@@ -50,6 +53,8 @@ public struct SettingsView: View {
 
         _hotkeyType = State(initialValue: config.hotkey.type)
         _doubleTapMs = State(initialValue: Double(config.hotkey.doubleTapThresholdMs))
+        _tripleTapToCancel = State(initialValue: config.hotkey.tripleTapToCancel)
+        _soundEffectsEnabled = State(initialValue: config.ui.soundEffectsEnabled)
         _autoStopMinutes = State(initialValue: max(1, config.handsFree.autoStopTimeoutSeconds / 60))
         _insertionMethod = State(initialValue: config.insertion.method)
         _restoreClipboard = State(initialValue: config.insertion.restoreClipboard)
@@ -63,6 +68,7 @@ public struct SettingsView: View {
         _llmEnabled = State(initialValue: config.llm.enabled)
         _llmProvider = State(initialValue: config.llm.provider)
         _llmModel = State(initialValue: config.llm.model)
+        _bypassShortPhrases = State(initialValue: config.llm.bypassShortPhrases)
         _systemPrompt = State(initialValue: config.llm.systemPrompt)
 
         _groqApiKey = State(initialValue: env["GROQ_API_KEY"] ?? "")
@@ -117,13 +123,25 @@ public struct SettingsView: View {
             Section(header: Text("Hotkey & Dictation Controls").bold()) {
                 Picker("Hold-to-Talk Hotkey:", selection: $hotkeyType) {
                     Text("Fn (Globe Key)").tag("fn")
+                    Text("Right Option (⌥) [Single-Hand]").tag("rightoption")
+                    Text("Mouse Button 4 (Side Back)").tag("mouse4")
+                    Text("Mouse Button 5 (Side Forward)").tag("mouse5")
                     Text("Right Command (⌘)").tag("rightcommand")
-                    Text("Right Option (⌥)").tag("rightoption")
                     Text("Right Control (⌃)").tag("rightcontrol")
                     Text("Control + Space (⌃Space)").tag("ctrlspace")
                     Text("Option + Space (⌥Space)").tag("optspace")
                 }
                 .pickerStyle(.menu)
+
+                Toggle("Triple-tap hotkey to cancel dictation", isOn: $tripleTapToCancel)
+                Text("Rapidly tap the hotkey 3 times to cancel recording and in-flight transcription without needing the Esc key.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Toggle("Audio Chimes & Sound Effects", isOn: $soundEffectsEnabled)
+                Text("Plays short macOS system chimes on recording start ('Tink'), stop ('Pop'), and cancel ('Basso').")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -216,9 +234,10 @@ public struct SettingsView: View {
         Form {
             Section(header: Text("Speech Recognition Engine").bold()) {
                 Picker("Provider:", selection: $transcriptionProvider) {
-                    Text("Local Whisper (whisper.cpp - Offline & Private)").tag("local")
-                    Text("Groq Whisper API (Ultra-Fast <300ms)").tag("groq")
-                    Text("OpenAI Whisper API (GPT-Transcribe)").tag("openai")
+                    Text("Priority Fallback").tag("priority")
+                    Text("Local Whisper").tag("local")
+                    Text("Groq API").tag("groq")
+                    Text("OpenAI API").tag("openai")
                 }
                 .pickerStyle(.segmented)
 
@@ -234,7 +253,23 @@ public struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
 
-            if transcriptionProvider == "local" {
+            if transcriptionProvider == "priority" {
+                Section(header: Text("STT Priority Cascade & Cost Guardrail").bold()) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("1. whisper.cpp (Local small.en q5 / small)").bold()
+                        Text("   Zero-cost offline transcription with Apple Silicon Metal acceleration.")
+                            .font(.caption).foregroundColor(.secondary)
+                        Text("2. Groq Whisper API (whisper-large-v3-turbo)").bold()
+                        Text("   Ultra-fast sub-second cloud fallback if local model is unavailable or empty.")
+                            .font(.caption).foregroundColor(.secondary)
+                        Text("3. OpenAI Whisper API (gpt-transcribe)").bold()
+                        Text("   Reliable final fallback if Groq API key is not configured or fails.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            if transcriptionProvider == "local" || transcriptionProvider == "priority" {
                 Section(header: Text("Local Whisper.cpp Models").bold()) {
                     let binaryFound = FileManager.default.fileExists(atPath: "/opt/homebrew/bin/whisper-cli")
                     HStack {
@@ -303,7 +338,8 @@ public struct SettingsView: View {
                         .padding(.vertical, 3)
                     }
                 }
-            } else if transcriptionProvider == "groq" {
+            }
+            if transcriptionProvider == "groq" || transcriptionProvider == "priority" {
                 Section(header: Text("Groq Transcription Settings").bold()) {
                     TextField("Model:", text: $groqModel)
                         .textFieldStyle(.roundedBorder)
@@ -311,7 +347,8 @@ public struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-            } else if transcriptionProvider == "openai" {
+            }
+            if transcriptionProvider == "openai" || transcriptionProvider == "priority" {
                 Section(header: Text("OpenAI Transcription Settings").bold()) {
                     TextField("Model:", text: $openaiModel)
                         .textFieldStyle(.roundedBorder)
@@ -332,6 +369,11 @@ public struct SettingsView: View {
                 Toggle("Enable LLM Polish (removes fillers, fixes punctuation & casing)", isOn: $llmEnabled)
 
                 if llmEnabled {
+                    Toggle("Smart Cost Guardrail: Bypass LLM for short/clean phrases", isOn: $bypassShortPhrases)
+                    Text("Bypasses LLM post-processing if transcript is under 4 words or has no filler words, eliminating API fees and latency.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
                     Picker("LLM Provider:", selection: $llmProvider) {
                         Text("Groq (Ultra-Fast <200ms)").tag("groq")
                         Text("OpenAI").tag("openai")
@@ -561,6 +603,8 @@ public struct SettingsView: View {
         // General
         cfg.hotkey.type = hotkeyType
         cfg.hotkey.doubleTapThresholdMs = Int(doubleTapMs)
+        cfg.hotkey.tripleTapToCancel = tripleTapToCancel
+        cfg.ui.soundEffectsEnabled = soundEffectsEnabled
         cfg.handsFree.autoStopTimeoutSeconds = autoStopMinutes * 60
         cfg.insertion.method = insertionMethod
         cfg.insertion.restoreClipboard = restoreClipboard
@@ -576,9 +620,11 @@ public struct SettingsView: View {
         cfg.llm.enabled = llmEnabled
         cfg.llm.provider = llmProvider
         cfg.llm.model = llmModel
+        cfg.llm.bypassShortPhrases = bypassShortPhrases
         cfg.llm.systemPrompt = systemPrompt
 
         ConfigManager.shared.saveConfig(cfg)
+        AppDelegate.shared?.setupServices()
 
         // Save API keys to .env
         ConfigManager.shared.setEnvKey("GROQ_API_KEY", value: groqApiKey)

@@ -18,6 +18,9 @@ case "${MODEL}" in
     small)
         FILE="ggml-small.bin"
         ;;
+    small.en-q5_1|small-q5)
+        FILE="ggml-small.en-q5_1.bin"
+        ;;
     medium)
         FILE="ggml-medium.bin"
         ;;
@@ -25,7 +28,7 @@ case "${MODEL}" in
         FILE="ggml-large-v3.bin"
         ;;
     *)
-        echo "Usage: $0 [tiny|base|small|medium|large-v3]"
+        echo "Usage: $0 [tiny|base|small|small.en-q5_1|medium|large-v3]"
         exit 1
         ;;
 esac

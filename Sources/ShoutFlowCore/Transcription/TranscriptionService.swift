@@ -266,17 +266,86 @@ private extension Data {
     }
 }
 
+// MARK: - Priority STT Fallback Service (Local whisper.cpp -> Groq -> OpenAI)
+
+public final class PriorityTranscriptionService: TranscriptionService, @unchecked Sendable {
+    private let localService: LocalWhisperService
+    private let groqService: GroqWhisperService
+    private let openaiService: OpenAIWhisperService
+    private var activeService: TranscriptionService?
+
+    public init(config: ShoutFlowConfig.TranscriptionConfig) {
+        self.localService = LocalWhisperService(config: config)
+        self.groqService = GroqWhisperService(config: config)
+        self.openaiService = OpenAIWhisperService(config: config)
+    }
+
+    public func transcribe(audioFileURL: URL) async throws -> String {
+        // Stage 1: Try Local whisper.cpp (small / small.en q5)
+        do {
+            activeService = localService
+            AppLogger.shared.log("[Priority STT] Stage 1: Attempting local whisper.cpp...")
+            let result = try await localService.transcribe(audioFileURL: audioFileURL)
+            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                AppLogger.shared.log("[Priority STT] Stage 1 (Local) succeeded!")
+                return trimmed
+            }
+            AppLogger.shared.log("[Priority STT] Stage 1 returned empty speech. Trying fallback...")
+        } catch {
+            AppLogger.shared.log("[Priority STT] Stage 1 (Local) failed: \(error.localizedDescription). Falling back to Groq...")
+        }
+
+        // Stage 2: Try Groq Whisper (whisper-large-v3-turbo)
+        if let groqKey = ConfigManager.shared.getEnv("GROQ_API_KEY"), !groqKey.isEmpty {
+            do {
+                activeService = groqService
+                AppLogger.shared.log("[Priority STT] Stage 2: Attempting Groq Whisper API (whisper-large-v3-turbo)...")
+                let result = try await groqService.transcribe(audioFileURL: audioFileURL)
+                let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    AppLogger.shared.log("[Priority STT] Stage 2 (Groq) succeeded!")
+                    return trimmed
+                }
+                AppLogger.shared.log("[Priority STT] Stage 2 returned empty speech. Trying fallback...")
+            } catch {
+                AppLogger.shared.log("[Priority STT] Stage 2 (Groq) failed: \(error.localizedDescription). Falling back to OpenAI...")
+            }
+        } else {
+            AppLogger.shared.log("[Priority STT] No GROQ_API_KEY available. Skipping Stage 2.")
+        }
+
+        // Stage 3: Try OpenAI (gpt-transcribe / whisper-1)
+        if let openaiKey = ConfigManager.shared.getEnv("OPENAI_API_KEY"), !openaiKey.isEmpty {
+            activeService = openaiService
+            AppLogger.shared.log("[Priority STT] Stage 3: Attempting OpenAI Whisper API (gpt-transcribe)...")
+            let result = try await openaiService.transcribe(audioFileURL: audioFileURL)
+            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed
+        }
+
+        throw TranscriptionError.apiError("Priority fallback exhausted: Local model failed, and neither GROQ_API_KEY nor OPENAI_API_KEY is available in .env.")
+    }
+
+    public func cancel() {
+        activeService?.cancel()
+        activeService = nil
+    }
+}
+
 // MARK: - Factory
 
 public final class TranscriptionServiceFactory {
     public static func makeService(for config: ShoutFlowConfig.TranscriptionConfig) -> TranscriptionService {
         switch config.provider.lowercased() {
+        case "local":
+            return LocalWhisperService(config: config)
         case "groq":
             return GroqWhisperService(config: config)
         case "openai":
             return OpenAIWhisperService(config: config)
         default:
-            return LocalWhisperService(config: config)
+            return PriorityTranscriptionService(config: config)
         }
     }
 }

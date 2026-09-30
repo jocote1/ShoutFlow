@@ -32,6 +32,7 @@ public final class HotKeyMonitor {
     private var doubleTapWorkItem: DispatchWorkItem?
     private var handsFreeTimer: Timer?
     private var handsFreeElapsedSeconds = 0
+    private var recentTapTimestamps: [Date] = []
 
     private let configManager = ConfigManager.shared
 
@@ -72,6 +73,7 @@ public final class HotKeyMonitor {
 
         cancelTimers()
         state = .idle
+        recentTapTimestamps.removeAll()
     }
 
     private func cancelTimers() {
@@ -90,6 +92,7 @@ public final class HotKeyMonitor {
         cancelTimers()
         state = .idle
         isHotkeyCurrentlyPressed = false
+        recentTapTimestamps.removeAll()
     }
 
     // MARK: - Auto-Reconnect Timer for Accessibility
@@ -112,7 +115,9 @@ public final class HotKeyMonitor {
 
         let eventMask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue) |
                                     (1 << CGEventType.keyDown.rawValue) |
-                                    (1 << CGEventType.keyUp.rawValue)
+                                    (1 << CGEventType.keyUp.rawValue) |
+                                    (1 << CGEventType.otherMouseDown.rawValue) |
+                                    (1 << CGEventType.otherMouseUp.rawValue)
 
         let observer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
@@ -143,13 +148,14 @@ public final class HotKeyMonitor {
     }
 
     private func setupNSEventMonitors() {
+        let mask: NSEvent.EventTypeMask = [.flagsChanged, .keyDown, .keyUp, .otherMouseDown, .otherMouseUp]
         if globalMonitor == nil {
-            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
                 self?.handleNSEvent(event)
             }
         }
         if localMonitor == nil {
-            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
                 self?.handleNSEvent(event)
                 return event
             }
@@ -177,7 +183,22 @@ public final class HotKeyMonitor {
             }
         }
 
-        // 2. Modifier Hotkey Monitoring
+        // 2. Mouse Button 4 & 5 Monitoring (Swallow event if target hotkey)
+        if type == .otherMouseDown || type == .otherMouseUp {
+            let buttonNumber = event.getIntegerValueField(.mouseEventButtonNumber)
+            let hotkeyType = configManager.config.hotkey.type.lowercased()
+            // Button 3 = Mouse Button 4 (Back), Button 4 = Mouse Button 5 (Forward)
+            let isTargetMouse = (hotkeyType == "mouse4" && buttonNumber == 3) ||
+                                (hotkeyType == "mouse5" && buttonNumber == 4)
+            if isTargetMouse {
+                let isDown = (type == .otherMouseDown)
+                handleMouseEvent(buttonNumber: buttonNumber, isDown: isDown)
+                return nil // Swallow event to avoid unwanted navigation/clicks in other apps
+            }
+            return Unmanaged.passRetained(event)
+        }
+
+        // 3. Modifier Hotkey Monitoring
         if type == .flagsChanged || type == .keyDown || type == .keyUp {
             let flags = event.flags
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -198,13 +219,43 @@ public final class HotKeyMonitor {
             return
         }
 
+        if event.type == .otherMouseDown || event.type == .otherMouseUp {
+            let buttonNumber = event.buttonNumber
+            let hotkeyType = configManager.config.hotkey.type.lowercased()
+            let isTargetMouse = (hotkeyType == "mouse4" && buttonNumber == 3) ||
+                                (hotkeyType == "mouse5" && buttonNumber == 4)
+            if isTargetMouse {
+                let isDown = (event.type == .otherMouseDown)
+                handleMouseEvent(buttonNumber: Int64(buttonNumber), isDown: isDown)
+            }
+            return
+        }
+
         if event.type == .flagsChanged || event.type == .keyDown || event.type == .keyUp {
             let cgFlags = CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue))
             handleKeyEvent(flags: cgFlags, keyCode: Int64(event.keyCode), isKeyDownEvent: (event.type == .keyDown))
         }
     }
 
+    private func handleMouseEvent(buttonNumber: Int64, isDown: Bool) {
+        let hotkeyType = configManager.config.hotkey.type.lowercased()
+        if isDown && !isHotkeyCurrentlyPressed {
+            isHotkeyCurrentlyPressed = true
+            AppLogger.shared.log("[HotKey] Mouse hotkey pressed down (type: \(hotkeyType), button: \(buttonNumber))")
+            DispatchQueue.main.async { [weak self] in
+                self?.onHotkeyDown()
+            }
+        } else if !isDown && isHotkeyCurrentlyPressed {
+            isHotkeyCurrentlyPressed = false
+            AppLogger.shared.log("[HotKey] Mouse hotkey released (type: \(hotkeyType), button: \(buttonNumber))")
+            DispatchQueue.main.async { [weak self] in
+                self?.onHotkeyUp()
+            }
+        }
+    }
+
     private func handleEscPressed() {
+        recentTapTimestamps.removeAll()
         switch state {
         case .holding, .waitingForDoubleTap, .handsFree:
             AppLogger.shared.log("[HotKey] Esc pressed: canceling active recording")
@@ -257,6 +308,10 @@ public final class HotKeyMonitor {
                 isPressed = flags.contains(.maskAlternate)
             }
 
+        case "mouse4", "mouse5":
+            // Mouse buttons handled separately via handleMouseEvent
+            return
+
         default:
             let fnMask: UInt64 = 0x800000
             let hasFnFlag = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
@@ -281,6 +336,25 @@ public final class HotKeyMonitor {
     // MARK: - State Machine Transitions
 
     private func onHotkeyDown() {
+        let now = Date()
+        recentTapTimestamps = recentTapTimestamps.filter { now.timeIntervalSince($0) < 0.85 }
+        recentTapTimestamps.append(now)
+
+        if configManager.config.hotkey.tripleTapToCancel && recentTapTimestamps.count >= 3 {
+            switch state {
+            case .holding, .waitingForDoubleTap, .handsFree, .transcribing:
+                AppLogger.shared.log("[HotKey] Triple-tap cancel triggered (count=\(recentTapTimestamps.count))!")
+                recentTapTimestamps.removeAll()
+                cancelTimers()
+                state = .idle
+                isHotkeyCurrentlyPressed = false
+                delegate?.hotKeyDidCancel()
+                return
+            case .idle:
+                break
+            }
+        }
+
         switch state {
         case .idle:
             state = .holding(startTime: Date())
@@ -329,6 +403,7 @@ public final class HotKeyMonitor {
 
     private func startHandsFreeSession() {
         cancelTimers()
+        recentTapTimestamps.removeAll()
         handsFreeElapsedSeconds = 0
         state = .handsFree(startTime: Date())
         delegate?.hotKeyDidEnterHandsFree()

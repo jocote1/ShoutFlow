@@ -87,6 +87,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
         do {
             let fileURL = try AudioRecorder.shared.startRecording()
             AppLogger.shared.log("[Audio] Recording started -> \(fileURL.lastPathComponent)")
+            SoundManager.shared.playStartChime()
             if ConfigManager.shared.config.ui.showFloatingPill {
                 pillWindow.updateState(.holdToTalk)
             }
@@ -108,11 +109,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
             do {
                 _ = try AudioRecorder.shared.startRecording()
                 AppLogger.shared.log("[Audio] Hands-free recording started")
+                SoundManager.shared.playStartChime()
             } catch {
                 AppLogger.shared.log("[Audio] Failed to start audio recording for hands-free: \(error.localizedDescription)")
                 hotKeyMonitor.setIdleState()
                 return
             }
+        } else {
+            SoundManager.shared.playStartChime()
         }
 
         let maxSec = ConfigManager.shared.config.handsFree.autoStopTimeoutSeconds
@@ -134,7 +138,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     }
 
     public func hotKeyDidCancel() {
-        AppLogger.shared.log("[Pipeline] Operation cancelled via Esc")
+        AppLogger.shared.log("[Pipeline] Operation cancelled via Esc or Triple-Tap")
         cancelCurrentOperation(notifyPill: true)
     }
 
@@ -149,6 +153,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
             return
         }
 
+        SoundManager.shared.playStopChime()
         AppLogger.shared.log("[Audio] Recording stopped. Beginning transcription pipeline...")
 
         if ConfigManager.shared.config.ui.showFloatingPill {
@@ -227,6 +232,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     }
 
     private func cancelCurrentOperation(notifyPill: Bool) {
+        let wasActive = AudioRecorder.shared.isRecording || activeProcessingTask != nil
         AudioRecorder.shared.cancelRecording()
         currentTranscriptionService?.cancel()
         currentLLMService?.cancel()
@@ -234,6 +240,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
         activeProcessingTask = nil
         hotKeyMonitor.setIdleState()
         statusBarMenu.setManualRecordingState(isRecording: false)
+
+        if wasActive {
+            SoundManager.shared.playCancelChime()
+        }
 
         if notifyPill && ConfigManager.shared.config.ui.showFloatingPill {
             pillWindow.updateState(.canceled)

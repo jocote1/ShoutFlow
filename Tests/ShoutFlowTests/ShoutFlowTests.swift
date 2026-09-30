@@ -10,23 +10,48 @@ final class ShoutFlowTests: XCTestCase {
         // 1. Hotkey requirements
         XCTAssertEqual(config.hotkey.type, "fn")
         XCTAssertEqual(config.hotkey.doubleTapThresholdMs, 350)
+        XCTAssertTrue(config.hotkey.tripleTapToCancel, "Triple-tap to cancel should be enabled by default")
 
         // 2. Hands-Free 5-minute auto-stop requirement
         XCTAssertEqual(config.handsFree.autoStopTimeoutSeconds, 300, "Hands-free auto-stop should be 300 seconds (5 minutes)")
 
-        // 3. Transcription defaults
-        XCTAssertEqual(config.transcription.provider, "local")
+        // 3. Transcription defaults (Priority: local -> groq -> openai)
+        XCTAssertEqual(config.transcription.provider, "priority")
         XCTAssertTrue(config.transcription.localModelPath.contains("ggml-small.bin"))
+        XCTAssertEqual(config.transcription.groqModel, "whisper-large-v3-turbo")
         XCTAssertEqual(config.transcription.openaiModel, "gpt-4o-transcribe")
 
-        // 4. LLM cleanup prompt defaults
+        // 4. LLM cleanup prompt & cost guardrail defaults
         XCTAssertTrue(config.llm.enabled)
+        XCTAssertEqual(config.llm.temperature, 0.0, "Temperature should be 0.0 to prevent drift and hallucination")
+        XCTAssertTrue(config.llm.bypassShortPhrases, "Short and clean phrases should bypass LLM for efficiency")
         XCTAssertTrue(config.llm.systemPrompt.contains("filler"))
         XCTAssertTrue(config.llm.systemPrompt.contains("punctuation"))
 
-        // 5. Clipboard defaults: leave transcript on clipboard
+        // 5. Sound effects default
+        XCTAssertTrue(config.ui.soundEffectsEnabled, "Audio chimes should be enabled by default")
+
+        // 6. Clipboard defaults: leave transcript on clipboard
         XCTAssertFalse(config.insertion.restoreClipboard, "By default, transcript should remain on clipboard")
         XCTAssertEqual(config.insertion.method, "paste")
+    }
+
+    func testLLMShortPhraseAndFillerBypass() {
+        let service = LLMService(config: ShoutFlowConfig.LLMConfig(enabled: true, bypassShortPhrases: true))
+
+        // 1. Phrases under 4 words should ALWAYS bypass LLM
+        XCTAssertTrue(service.shouldBypassLLM(for: "Hello"))
+        XCTAssertTrue(service.shouldBypassLLM(for: "Yes please"))
+        XCTAssertTrue(service.shouldBypassLLM(for: "Quick brown fox"))
+
+        // 2. Phrases 4+ words without fillers should bypass LLM
+        XCTAssertTrue(service.shouldBypassLLM(for: "The quarterly report is finished now."))
+        XCTAssertTrue(service.shouldBypassLLM(for: "Please send this document to Ole right away."))
+
+        // 3. Phrases with filler words should NOT bypass LLM (they need cleaning!)
+        XCTAssertFalse(service.shouldBypassLLM(for: "So basically um we need to finish this."))
+        XCTAssertFalse(service.shouldBypassLLM(for: "I think uh we should do that tomorrow."))
+        XCTAssertFalse(service.shouldBypassLLM(for: "It was like really cool you know?"))
     }
 
     func testConfigEncodingDecoding() throws {

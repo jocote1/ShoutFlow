@@ -40,7 +40,8 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
     public static let shared = ModelManager()
 
     public static let availableModels: [WhisperModelInfo] = [
-        WhisperModelInfo(id: "small", name: "Small (Recommended)", filename: "ggml-small.bin", estimatedSize: "~461 MB"),
+        WhisperModelInfo(id: "small.en-q5_1", name: "Small.en Q5 (Fast & High Accuracy)", filename: "ggml-small.en-q5_1.bin", estimatedSize: "~181 MB"),
+        WhisperModelInfo(id: "small", name: "Small Multilingual (Recommended)", filename: "ggml-small.bin", estimatedSize: "~461 MB"),
         WhisperModelInfo(id: "medium", name: "Medium (Higher Accuracy)", filename: "ggml-medium.bin", estimatedSize: "~1.4 GB"),
         WhisperModelInfo(id: "base", name: "Base (Fastest)", filename: "ggml-base.bin", estimatedSize: "~141 MB"),
         WhisperModelInfo(id: "tiny", name: "Tiny (Minimal)", filename: "ggml-tiny.bin", estimatedSize: "~75 MB"),

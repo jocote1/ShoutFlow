@@ -14,6 +14,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
 
     private var enabledMenuItem: NSMenuItem!
     private var manualDictateItem: NSMenuItem!
+    private var priorityProviderItem: NSMenuItem!
     private var localWhisperItem: NSMenuItem!
     private var groqWhisperItem: NSMenuItem!
     private var openaiWhisperItem: NSMenuItem!
@@ -74,6 +75,10 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         let engineItem = NSMenuItem(title: "Transcription Provider", action: nil, keyEquivalent: "")
         let engineSubmenu = NSMenu()
 
+        priorityProviderItem = NSMenuItem(title: "Priority Fallback (Local → Groq → OpenAI)", action: #selector(selectPriorityProvider), keyEquivalent: "")
+        priorityProviderItem.target = self
+        engineSubmenu.addItem(priorityProviderItem)
+
         localWhisperItem = NSMenuItem(title: "Local Whisper (whisper.cpp)", action: #selector(selectLocalWhisper), keyEquivalent: "")
         localWhisperItem.target = self
         engineSubmenu.addItem(localWhisperItem)
@@ -91,7 +96,19 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
 
         // Hotkey Display
         let hotkeyType = ConfigManager.shared.config.hotkey.type
-        let hotkeyItem = NSMenuItem(title: "Hotkey: \(hotkeyType.capitalized) (Hold to talk · 2x Hands-Free)", action: #selector(openSettingsWindow), keyEquivalent: "")
+        let hotkeyDisplay: String
+        switch hotkeyType.lowercased() {
+        case "fn": hotkeyDisplay = "Fn (Globe)"
+        case "rightoption": hotkeyDisplay = "Right Option (⌥)"
+        case "mouse4": hotkeyDisplay = "Mouse Button 4 (Back)"
+        case "mouse5": hotkeyDisplay = "Mouse Button 5 (Forward)"
+        case "rightcommand": hotkeyDisplay = "Right Command (⌘)"
+        case "rightcontrol": hotkeyDisplay = "Right Control (⌃)"
+        case "ctrlspace": hotkeyDisplay = "⌃Space"
+        case "optspace": hotkeyDisplay = "⌥Space"
+        default: hotkeyDisplay = hotkeyType.capitalized
+        }
+        let hotkeyItem = NSMenuItem(title: "Hotkey: \(hotkeyDisplay) (Hold · 2x Hands-Free · 3x Cancel)", action: #selector(openSettingsWindow), keyEquivalent: "")
         hotkeyItem.target = self
         menu.addItem(hotkeyItem)
 
@@ -147,6 +164,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
 
     private func refreshEngineSelection() {
         let currentProvider = ConfigManager.shared.config.transcription.provider.lowercased()
+        priorityProviderItem.state = (currentProvider == "priority") ? .on : .off
         localWhisperItem.state = (currentProvider == "local") ? .on : .off
         groqWhisperItem.state = (currentProvider == "groq") ? .on : .off
         openaiWhisperItem.state = (currentProvider == "openai") ? .on : .off
@@ -157,6 +175,12 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         updateStatusItemIcon()
         enabledMenuItem.state = isEnabled ? .on : .off
         delegate?.statusBarDidToggleEnabled(isEnabled)
+    }
+
+    @objc private func selectPriorityProvider() {
+        ConfigManager.shared.updateTranscriptionProvider("priority")
+        refreshEngineSelection()
+        delegate?.statusBarDidChangeProvider("priority")
     }
 
     @objc private func selectLocalWhisper() {

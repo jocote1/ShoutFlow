@@ -9,16 +9,43 @@ public final class LLMService: @unchecked Sendable {
     }
 
     public func cleanTranscript(_ rawText: String) async -> String {
-        guard config.enabled, !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard config.enabled, !trimmed.isEmpty else {
+            return rawText
+        }
+
+        // Efficiency & Cost Guardrail: Bypass LLM if short or no fillers
+        if config.bypassShortPhrases && shouldBypassLLM(for: trimmed) {
+            AppLogger.shared.log("[LLM] Bypassing post-processing: transcript is under 4 words or contains zero filler words. Zero latency & cost.")
             return rawText
         }
 
         do {
-            return try await processWithLLM(rawText)
+            return try await processWithLLM(trimmed)
         } catch {
-            print("[ShoutFlow] LLM post-processing fallback: \(error.localizedDescription). Using raw transcript.")
+            AppLogger.shared.log("[LLM] Post-processing fallback: \(error.localizedDescription). Using raw transcript.")
             return rawText
         }
+    }
+
+    public func shouldBypassLLM(for text: String) -> Bool {
+        let words = text.split { $0.isWhitespace }
+        if words.count < 4 {
+            return true
+        }
+
+        let lower = text.lowercased()
+        let fillerPatterns = [
+            "\\bum\\b", "\\buh\\b", "\\blike\\b", "\\byou know\\b",
+            "\\ber\\b", "\\bah\\b", "\\bhmm\\b", "\\bso basically\\b",
+            "\\bi mean\\b", "\\bsort of\\b", "\\bkind of\\b"
+        ]
+
+        let hasFiller = fillerPatterns.contains { pattern in
+            (try? NSRegularExpression(pattern: pattern).firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower))) != nil
+        }
+
+        return !hasFiller
     }
 
     private func processWithLLM(_ rawText: String) async throws -> String {
@@ -42,7 +69,7 @@ public final class LLMService: @unchecked Sendable {
         }
 
         guard let key = apiKey, !key.isEmpty else {
-            print("[ShoutFlow] No API key available for LLM provider '\(provider)'. Returning raw transcript.")
+            AppLogger.shared.log("[LLM] No API key available for LLM provider '\(provider)'. Returning raw transcript.")
             return rawText
         }
 
@@ -60,13 +87,28 @@ public final class LLMService: @unchecked Sendable {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 15.0
 
+        let provider = config.provider.lowercased()
+        let defaultModel: String
+        if provider == "openai" {
+            defaultModel = "gpt-4o-mini"
+        } else {
+            defaultModel = "llama-3.1-8b-instant"
+        }
+
+        let model = config.model.isEmpty ? defaultModel : config.model
+
+        // Dynamic max_tokens based on word count
+        let wordCount = rawText.split { $0.isWhitespace }.count
+        let dynamicMaxTokens = max(32, min(1024, Int(Double(wordCount) * 2.5) + 30))
+
         let payload: [String: Any] = [
-            "model": config.model.isEmpty ? "llama-3.3-70b-versatile" : config.model,
+            "model": model,
             "messages": [
                 ["role": "system", "content": config.systemPrompt],
                 ["role": "user", "content": rawText]
             ],
-            "temperature": 0.1
+            "temperature": config.temperature, // 0.0 to prevent drift and reduce generation cycles
+            "max_tokens": dynamicMaxTokens
         ]
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -75,7 +117,7 @@ public final class LLMService: @unchecked Sendable {
 
         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let errorObj = json["error"] as? [String: Any], let msg = errorObj["message"] as? String {
-                print("[ShoutFlow] LLM API returned error: \(msg)")
+                AppLogger.shared.log("[LLM] API returned error: \(msg)")
                 return rawText
             }
 
@@ -98,14 +140,17 @@ public final class LLMService: @unchecked Sendable {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 15.0
 
+        let wordCount = rawText.split { $0.isWhitespace }.count
+        let dynamicMaxTokens = max(32, min(1024, Int(Double(wordCount) * 2.5) + 30))
+
         let payload: [String: Any] = [
             "model": config.model.isEmpty ? "claude-3-5-haiku-20241022" : config.model,
-            "max_tokens": 1024,
+            "max_tokens": dynamicMaxTokens,
             "system": config.systemPrompt,
             "messages": [
                 ["role": "user", "content": rawText]
             ],
-            "temperature": 0.1
+            "temperature": config.temperature // 0.0
         ]
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)

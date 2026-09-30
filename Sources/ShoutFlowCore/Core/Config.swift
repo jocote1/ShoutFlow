@@ -2,20 +2,30 @@ import Foundation
 
 public struct ShoutFlowConfig: Codable {
     public struct HotkeyConfig: Codable {
-        /// Type: "fn" (default) or "shortcut"
+        /// Type: "fn" (default), "rightOption", "mouse4", "mouse5", "rightCommand", "ctrlspace", "optspace"
         public var type: String
-        /// For modifier keys: "fn", "rightCommand", "rightOption", "rightControl"
-        /// Or key combos: e.g. modifiers: ["command", "shift"], key: "space"
         public var key: String?
         public var modifiers: [String]?
         /// Double tap detection threshold in milliseconds
         public var doubleTapThresholdMs: Int
+        /// Triple tap cancels recording
+        public var tripleTapToCancel: Bool
 
-        public init(type: String = "fn", key: String? = nil, modifiers: [String]? = nil, doubleTapThresholdMs: Int = 350) {
+        public init(type: String = "fn", key: String? = nil, modifiers: [String]? = nil, doubleTapThresholdMs: Int = 350, tripleTapToCancel: Bool = true) {
             self.type = type
             self.key = key
             self.modifiers = modifiers
             self.doubleTapThresholdMs = doubleTapThresholdMs
+            self.tripleTapToCancel = tripleTapToCancel
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.type = try container.decodeIfPresent(String.self, forKey: .type) ?? "fn"
+            self.key = try container.decodeIfPresent(String.self, forKey: .key)
+            self.modifiers = try container.decodeIfPresent([String].self, forKey: .modifiers)
+            self.doubleTapThresholdMs = try container.decodeIfPresent(Int.self, forKey: .doubleTapThresholdMs) ?? 350
+            self.tripleTapToCancel = try container.decodeIfPresent(Bool.self, forKey: .tripleTapToCancel) ?? true
         }
     }
 
@@ -26,10 +36,15 @@ public struct ShoutFlowConfig: Codable {
         public init(autoStopTimeoutSeconds: Int = 300) {
             self.autoStopTimeoutSeconds = autoStopTimeoutSeconds
         }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.autoStopTimeoutSeconds = try container.decodeIfPresent(Int.self, forKey: .autoStopTimeoutSeconds) ?? 300
+        }
     }
 
     public struct TranscriptionConfig: Codable {
-        /// "local" (whisper.cpp), "groq", or "openai"
+        /// "priority" (default: local -> groq -> openai), "local", "groq", or "openai"
         public var provider: String
         /// Path to whisper.cpp binary or "whisper-cli"
         public var localWhisperBinary: String
@@ -43,7 +58,7 @@ public struct ShoutFlowConfig: Codable {
         public var openaiModel: String
 
         public init(
-            provider: String = "local",
+            provider: String = "priority",
             localWhisperBinary: String = "/opt/homebrew/bin/whisper-cli",
             localModelPath: String = "~/.config/shoutflow/models/ggml-small.bin",
             language: String = "auto",
@@ -57,6 +72,16 @@ public struct ShoutFlowConfig: Codable {
             self.groqModel = groqModel
             self.openaiModel = openaiModel
         }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "priority"
+            self.localWhisperBinary = try container.decodeIfPresent(String.self, forKey: .localWhisperBinary) ?? "/opt/homebrew/bin/whisper-cli"
+            self.localModelPath = try container.decodeIfPresent(String.self, forKey: .localModelPath) ?? "~/.config/shoutflow/models/ggml-small.bin"
+            self.language = try container.decodeIfPresent(String.self, forKey: .language) ?? "auto"
+            self.groqModel = try container.decodeIfPresent(String.self, forKey: .groqModel) ?? "whisper-large-v3-turbo"
+            self.openaiModel = try container.decodeIfPresent(String.self, forKey: .openaiModel) ?? "gpt-4o-transcribe"
+        }
     }
 
     public struct LLMConfig: Codable {
@@ -66,12 +91,16 @@ public struct ShoutFlowConfig: Codable {
         public var model: String
         public var customBaseUrl: String?
         public var systemPrompt: String
+        public var temperature: Double
+        public var bypassShortPhrases: Bool
 
         public init(
             enabled: Bool = true,
             provider: String = "groq",
-            model: String = "llama-3.3-70b-versatile",
+            model: String = "llama-3.1-8b-instant",
             customBaseUrl: String? = nil,
+            temperature: Double = 0.0,
+            bypassShortPhrases: Bool = true,
             systemPrompt: String = """
             You are an expert dictation assistant.
             Take the raw speech transcript and output a refined, natural text:
@@ -87,7 +116,29 @@ public struct ShoutFlowConfig: Codable {
             self.provider = provider
             self.model = model
             self.customBaseUrl = customBaseUrl
+            self.temperature = temperature
+            self.bypassShortPhrases = bypassShortPhrases
             self.systemPrompt = systemPrompt
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+            self.provider = try container.decodeIfPresent(String.self, forKey: .provider) ?? "groq"
+            self.model = try container.decodeIfPresent(String.self, forKey: .model) ?? "llama-3.1-8b-instant"
+            self.customBaseUrl = try container.decodeIfPresent(String.self, forKey: .customBaseUrl)
+            self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.0
+            self.bypassShortPhrases = try container.decodeIfPresent(Bool.self, forKey: .bypassShortPhrases) ?? true
+            self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? """
+            You are an expert dictation assistant.
+            Take the raw speech transcript and output a refined, natural text:
+            1. Remove verbal fillers and hesitation sounds (such as "um", "uh", "like", "you know", "er", "ah").
+            2. Correct punctuation, capitalization, contractions, and sentence boundaries.
+            3. Format numbers, dates, currency, and bulleted lists when appropriate.
+            4. Match casing and style to smooth dictation.
+            5. Strictly preserve the original meaning, tone, intent, and terminology.
+            6. Output ONLY the polished dictation text without any preamble, explanation, or quotes.
+            """
         }
     }
 
@@ -104,15 +155,31 @@ public struct ShoutFlowConfig: Codable {
             self.restoreClipboard = restoreClipboard
             self.pasteDelayMs = pasteDelayMs
         }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.method = try container.decodeIfPresent(String.self, forKey: .method) ?? "paste"
+            self.restoreClipboard = try container.decodeIfPresent(Bool.self, forKey: .restoreClipboard) ?? false
+            self.pasteDelayMs = try container.decodeIfPresent(Int.self, forKey: .pasteDelayMs) ?? 50
+        }
     }
 
     public struct UIConfig: Codable {
         public var showFloatingPill: Bool
         public var pillPosition: String // "bottom" or "top"
+        public var soundEffectsEnabled: Bool
 
-        public init(showFloatingPill: Bool = true, pillPosition: String = "bottom") {
+        public init(showFloatingPill: Bool = true, pillPosition: String = "bottom", soundEffectsEnabled: Bool = true) {
             self.showFloatingPill = showFloatingPill
             self.pillPosition = pillPosition
+            self.soundEffectsEnabled = soundEffectsEnabled
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.showFloatingPill = try container.decodeIfPresent(Bool.self, forKey: .showFloatingPill) ?? true
+            self.pillPosition = try container.decodeIfPresent(String.self, forKey: .pillPosition) ?? "bottom"
+            self.soundEffectsEnabled = try container.decodeIfPresent(Bool.self, forKey: .soundEffectsEnabled) ?? true
         }
     }
 
