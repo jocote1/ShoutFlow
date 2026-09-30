@@ -74,8 +74,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     public func hotKeyDidBeginHold() {
         guard statusBarMenu.isEnabled else { return }
 
-        // Cancel any pending task
-        cancelCurrentOperation(notifyPill: false)
+        // Cancel any pending in-flight transcription or LLM task
+        activeProcessingTask?.cancel()
+        activeProcessingTask = nil
+        currentTranscriptionService?.cancel()
+        currentLLMService?.cancel()
+
+        if AudioRecorder.shared.isRecording {
+            _ = AudioRecorder.shared.stopRecording()
+        }
 
         do {
             let fileURL = try AudioRecorder.shared.startRecording()

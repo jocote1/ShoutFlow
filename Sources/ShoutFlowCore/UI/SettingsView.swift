@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreAudio
 
 public struct SettingsView: View {
     @ObservedObject var modelManager = ModelManager.shared
@@ -36,9 +37,16 @@ public struct SettingsView: View {
     @State private var isAccessibilityGranted: Bool = Permissions.isAccessibilityGranted
     @State private var isMicrophoneGranted: Bool = Permissions.isMicrophoneGranted
 
+    // Audio Input Devices
+    @State private var availableMicrophones: [AudioInputDevice] = []
+    @State private var selectedMicrophoneId: AudioDeviceID = 0
+
     public init() {
         let config = ConfigManager.shared.config
         let env = ConfigManager.shared.env
+        let defMicId = AudioDeviceManager.shared.getDefaultInputDeviceID()
+
+        _selectedMicrophoneId = State(initialValue: defMicId)
 
         _hotkeyType = State(initialValue: config.hotkey.type)
         _doubleTapMs = State(initialValue: Double(config.hotkey.doubleTapThresholdMs))
@@ -93,7 +101,13 @@ public struct SettingsView: View {
         }
         .onAppear {
             refreshPermissionStatus()
+            refreshMicrophoneDevices()
         }
+    }
+
+    private func refreshMicrophoneDevices() {
+        availableMicrophones = AudioDeviceManager.shared.getInputDevices()
+        selectedMicrophoneId = AudioDeviceManager.shared.getDefaultInputDeviceID()
     }
 
     // MARK: - General Tab
@@ -134,6 +148,26 @@ public struct SettingsView: View {
                 }
                 .pickerStyle(.menu)
                 Text("Safety limit to prevent endless recording if forgotten.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section(header: Text("Microphone Input Device").bold()) {
+                if availableMicrophones.isEmpty {
+                    Text("No microphone inputs detected.")
+                        .foregroundColor(.secondary)
+                } else {
+                    Picker("Active Microphone:", selection: $selectedMicrophoneId) {
+                        ForEach(availableMicrophones, id: \.id) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: selectedMicrophoneId) { newId in
+                        AudioDeviceManager.shared.setDefaultInputDevice(id: newId)
+                    }
+                }
+                Text("Select your microphone. Built-in Mac microphone provides instant response without Bluetooth audio delay.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

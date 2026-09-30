@@ -67,16 +67,19 @@ public final class TextInserter {
     private func simulateCmdV() {
         let vKeyCode: CGKeyCode = 9 // 'v' key code in US layout
 
-        let source = CGEventSource(stateID: .combinedSessionState)
+        let source = CGEventSource(stateID: .hidSystemState)
 
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true)
-        keyDown?.flags = .maskCommand
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false) else {
+            return
+        }
 
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false)
-        keyUp?.flags = .maskCommand
+        keyDown.flags = .maskCommand
+        keyUp.flags = [] // Clean release without lingering modifiers
 
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        keyDown.post(tap: .cghidEventTap)
+        usleep(25_000) // 25ms hold so target apps reliably register the keystroke
+        keyUp.post(tap: .cghidEventTap)
     }
 
     private func simulateKeystrokes(_ text: String) {

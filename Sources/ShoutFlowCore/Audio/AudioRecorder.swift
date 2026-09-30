@@ -55,6 +55,7 @@ public final class AudioRecorder: NSObject, AVAudioRecorderDelegate {
         let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
         recorder.delegate = self
         recorder.isMeteringEnabled = true
+        recorder.prepareToRecord()
 
         guard recorder.record() else {
             throw NSError(domain: "ShoutFlowAudio", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to start audio recording"])
@@ -69,9 +70,24 @@ public final class AudioRecorder: NSObject, AVAudioRecorderDelegate {
         guard isRecording, let recorder = audioRecorder else {
             return nil
         }
+
+        recorder.updateMeters()
+        let avgPower = recorder.averagePower(forChannel: 0)
+        let peakPower = recorder.peakPower(forChannel: 0)
+        let duration = recorder.currentTime
+
         recorder.stop()
         isRecording = false
         audioRecorder = nil
+
+        AppLogger.shared.log(String(format: "[Audio] Recording stopped. Duration: %.2fs, AvgPower: %.1f dB, PeakPower: %.1f dB", duration, avgPower, peakPower))
+
+        // If audio is digitally silent (-100 dB or less, e.g. AirPods in case), trigger fallback to built-in mic
+        if avgPower <= -100.0 {
+            AppLogger.shared.log("[Audio] WARNING: Audio stream is digitally silent (power: \(avgPower) dB). Fallback check for built-in microphone...")
+            AudioDeviceManager.shared.fallbackToBuiltinMicrophoneIfNeeded()
+        }
+
         let recordedURL = currentFileURL
         return recordedURL
     }

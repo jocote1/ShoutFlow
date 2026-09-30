@@ -1,8 +1,35 @@
+# Xcode / SwiftPM
 .build/
 build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+*.xcuserdatad
+.swiftpm/
+
+# macOS system
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Environment & Secrets (Crucial: never leak API keys)
 .env
+.env.*
+*.env
+
+# Logs & Diagnostics
+*.log
+shoutflow.log
+
+# Audio & Models (Large binaries)
 *.bin
 *.wav
 *.aiff
-.swiftpm/
+*.mp3
+models/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~

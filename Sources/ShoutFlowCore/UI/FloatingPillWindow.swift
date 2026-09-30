@@ -18,7 +18,6 @@ public final class FloatingPillWindowController: NSWindowController {
     private var containerView: NSView!
 
     // UI elements
-    private var iconImageView: NSImageView!
     private var statusDot: NSView!
     private var titleLabel: NSTextField!
     private var subtitleLabel: NSTextField!
@@ -30,22 +29,30 @@ public final class FloatingPillWindowController: NSWindowController {
     private var meterTimer: Timer?
 
     private var currentState: PillState = .hidden
+    private var hideToken = UUID()
+
+    private class NonActivatingHUDPanel: NSPanel {
+        override var canBecomeKey: Bool { false }
+        override var canBecomeMain: Bool { false }
+    }
 
     private init() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 220, height: 46),
+        let panel = NonActivatingHUDPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 224, height: 46),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
-        panel.level = .floating
+        panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
 
         super.init(window: panel)
         self.pillPanel = panel
@@ -58,42 +65,46 @@ public final class FloatingPillWindowController: NSWindowController {
     }
 
     private func setupViews() {
-        containerView = NSView(frame: pillPanel.contentView!.bounds)
+        containerView = NSView(frame: NSRect(x: 0, y: 0, width: 224, height: 46))
         containerView.autoresizingMask = [.width, .height]
         containerView.wantsLayer = true
         containerView.layer?.cornerRadius = 23
         containerView.layer?.masksToBounds = true
+        containerView.layer?.backgroundColor = NSColor(red: 0.10, green: 0.10, blue: 0.13, alpha: 0.94).cgColor
         containerView.layer?.borderWidth = 1.0
-        containerView.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        containerView.layer?.borderColor = NSColor.white.withAlphaComponent(0.20).cgColor
 
         visualEffectView = NSVisualEffectView(frame: containerView.bounds)
         visualEffectView.autoresizingMask = [.width, .height]
         visualEffectView.material = .hudWindow
         visualEffectView.state = .active
-        visualEffectView.blendingMode = .behindWindow
+        visualEffectView.blendingMode = .withinWindow
         containerView.addSubview(visualEffectView)
 
         // Status Dot / Indicator
-        statusDot = NSView(frame: NSRect(x: 14, y: 17, width: 12, height: 12))
+        statusDot = NSView(frame: NSRect(x: 15, y: 17, width: 12, height: 12))
         statusDot.wantsLayer = true
         statusDot.layer?.cornerRadius = 6
         statusDot.layer?.backgroundColor = NSColor.systemRed.cgColor
         containerView.addSubview(statusDot)
 
-        // Waveform Bars (3 mini bars)
-        waveformStack = NSStackView(frame: NSRect(x: 12, y: 14, width: 18, height: 18))
+        // Waveform Bars (4 mini bars)
+        waveformStack = NSStackView(frame: NSRect(x: 13, y: 14, width: 18, height: 18))
         waveformStack.orientation = .horizontal
         waveformStack.distribution = .fillEqually
-        waveformStack.spacing = 2
+        waveformStack.spacing = 2.5
         waveformStack.alignment = .centerY
 
         for _ in 0..<4 {
             let bar = NSView()
+            bar.translatesAutoresizingMaskIntoConstraints = false
             bar.wantsLayer = true
             bar.layer?.backgroundColor = NSColor.systemRed.cgColor
             bar.layer?.cornerRadius = 1.5
             bar.widthAnchor.constraint(equalToConstant: 2.5).isActive = true
-            bar.heightAnchor.constraint(equalToConstant: 6).isActive = true
+            let hConstraint = bar.heightAnchor.constraint(equalToConstant: 6)
+            hConstraint.identifier = "barHeight"
+            hConstraint.isActive = true
             waveformBars.append(bar)
             waveformStack.addArrangedSubview(bar)
         }
@@ -111,32 +122,38 @@ public final class FloatingPillWindowController: NSWindowController {
         titleLabel = NSTextField(labelWithString: "Hold to Talk")
         titleLabel.font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
         titleLabel.textColor = .white
-        titleLabel.frame = NSRect(x: 36, y: 22, width: 170, height: 16)
+        titleLabel.frame = NSRect(x: 38, y: 22, width: 172, height: 16)
         containerView.addSubview(titleLabel)
 
         // Subtitle Label
         subtitleLabel = NSTextField(labelWithString: "Release to transcribe")
         subtitleLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
-        subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.65)
-        subtitleLabel.frame = NSRect(x: 36, y: 8, width: 170, height: 14)
+        subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.70)
+        subtitleLabel.frame = NSRect(x: 38, y: 8, width: 172, height: 14)
         containerView.addSubview(subtitleLabel)
 
-        pillPanel.contentView?.addSubview(containerView)
+        pillPanel.contentView = containerView
     }
 
     public func updateState(_ state: PillState) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.currentState = state
+            AppLogger.shared.log("[Pill] Updating state to: \(state)")
 
             switch state {
             case .hidden:
                 self.stopAudioMetering()
+                let currentToken = UUID()
+                self.hideToken = currentToken
                 NSAnimationContext.runAnimationGroup({ context in
                     context.duration = 0.2
                     self.pillPanel.animator().alphaValue = 0.0
-                }, completionHandler: {
-                    self.pillPanel.orderOut(nil)
+                }, completionHandler: { [weak self] in
+                    guard let self = self, self.hideToken == currentToken else { return }
+                    if self.currentState == .hidden {
+                        self.pillPanel.orderOut(nil)
+                    }
                 })
 
             case .holdToTalk:
@@ -200,7 +217,8 @@ public final class FloatingPillWindowController: NSWindowController {
                 self.titleLabel.stringValue = "Canceled"
                 self.subtitleLabel.stringValue = "Recording discarded"
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    guard let self = self else { return }
                     if self.currentState == .canceled {
                         self.updateState(.hidden)
                     }
@@ -217,7 +235,8 @@ public final class FloatingPillWindowController: NSWindowController {
                 self.titleLabel.stringValue = "Pasted ✓"
                 self.subtitleLabel.stringValue = "Clipboard updated"
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+                    guard let self = self else { return }
                     if self.currentState == .done {
                         self.updateState(.hidden)
                     }
@@ -227,19 +246,19 @@ public final class FloatingPillWindowController: NSWindowController {
     }
 
     private func showPanel() {
+        self.hideToken = UUID() // Invalidate any scheduled hide
         reposition()
-        if !pillPanel.isVisible || pillPanel.alphaValue < 0.1 {
-            pillPanel.alphaValue = 0.0
-            pillPanel.orderFrontRegardless()
+        pillPanel.orderFrontRegardless()
+        if pillPanel.alphaValue < 0.95 {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
+                context.duration = 0.15
                 self.pillPanel.animator().alphaValue = 1.0
             }
         }
     }
 
     private func reposition() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let screenRect = screen.visibleFrame
         let pillWidth: CGFloat = 224
         let pillHeight: CGFloat = 46
@@ -251,11 +270,13 @@ public final class FloatingPillWindowController: NSWindowController {
         if pos == "top" {
             y = screenRect.maxY - pillHeight - 20
         } else {
-            // Default bottom
-            y = screenRect.minY + 40
+            // Default bottom (50pt above screen bottom)
+            y = screenRect.minY + 50
         }
 
-        pillPanel.setFrame(NSRect(x: x, y: y, width: pillWidth, height: pillHeight), display: true)
+        let newFrame = NSRect(x: x, y: y, width: pillWidth, height: pillHeight)
+        pillPanel.setFrame(newFrame, display: true)
+        AppLogger.shared.log("[Pill] Positioned at: \(newFrame) on screen: \(screenRect)")
     }
 
     private func setBarColors(_ color: NSColor) {
@@ -277,17 +298,20 @@ public final class FloatingPillWindowController: NSWindowController {
         meterTimer?.invalidate()
         meterTimer = nil
         for bar in waveformBars {
-            bar.constraints.first { $0.firstAttribute == .height }?.constant = 6
+            if let constraint = bar.constraints.first(where: { $0.identifier == "barHeight" || $0.firstAttribute == .height }) {
+                constraint.constant = 6
+            }
         }
     }
 
     private func animateWaveform(level: Float) {
-        // Modulate bars with slight variance
-        let multipliers: [CGFloat] = [0.8, 1.2, 1.4, 0.9]
+        let multipliers: [CGFloat] = [0.8, 1.3, 1.1, 0.9]
         for (i, bar) in waveformBars.enumerated() {
             let mult = multipliers[i % multipliers.count]
             let h = max(4.0, min(16.0, CGFloat(level) * 16.0 * mult))
-            bar.constraints.first { $0.firstAttribute == .height }?.constant = h
+            if let constraint = bar.constraints.first(where: { $0.identifier == "barHeight" || $0.firstAttribute == .height }) {
+                constraint.constant = h
+            }
         }
     }
 }

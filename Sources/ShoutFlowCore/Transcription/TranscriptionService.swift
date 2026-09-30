@@ -66,7 +66,8 @@ public final class LocalWhisperService: TranscriptionService, @unchecked Sendabl
                 "-m", modelPath,
                 "-f", audioFileURL.path,
                 "-nt", // no timestamps
-                "-np"  // no progress prints
+                "-np", // no progress prints
+                "--suppress-regex", "^\\s*(you|Thank you\\.?|you\\.?)\\s*$"
             ]
 
             if config.language != "auto" && !config.language.isEmpty {
@@ -114,7 +115,13 @@ public final class LocalWhisperService: TranscriptionService, @unchecked Sendabl
                         .joined(separator: " ")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
 
-                    continuation.resume(returning: cleaned.isEmpty ? stdoutStr : cleaned)
+                    let lower = cleaned.lowercased().trimmingCharacters(in: .punctuationCharacters)
+                    // If output is a known Whisper hallucination on silence/blank audio, treat as empty
+                    if lower == "you" || lower == "thank you" || lower.isEmpty || cleaned.hasPrefix("[") {
+                        continuation.resume(returning: "")
+                    } else {
+                        continuation.resume(returning: cleaned)
+                    }
                 } else {
                     continuation.resume(throwing: TranscriptionError.processFailed("Status \(proc.terminationStatus): \(stderrStr)"))
                 }
