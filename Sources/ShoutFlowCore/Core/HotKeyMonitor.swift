@@ -26,6 +26,7 @@ public final class HotKeyMonitor {
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var retryTimer: Timer?
+    private var holdPollTimer: Timer?
 
     private var state: MonitorState = .idle
     private var isHotkeyCurrentlyPressed = false
@@ -79,9 +80,11 @@ public final class HotKeyMonitor {
         doubleTapWorkItem = nil
         handsFreeTimer?.invalidate()
         handsFreeTimer = nil
+        stopHoldPolling()
     }
 
     public func setTranscribingState() {
+        stopHoldPolling()
         state = .transcribing
     }
 
@@ -102,6 +105,58 @@ public final class HotKeyMonitor {
                 self.setupEventTap()
             }
         }
+    }
+
+    // MARK: - Hardware Level Hold Polling
+    // Solves macOS Apple Silicon firmware dropping Fn/Globe keyUp events
+
+    private func startHoldPolling() {
+        holdPollTimer?.invalidate()
+        // Poll every 35ms while holding to detect physical release even if macOS drops the release event
+        holdPollTimer = Timer.scheduledTimer(withTimeInterval: 0.035, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            guard case .holding = self.state else {
+                self.stopHoldPolling()
+                return
+            }
+
+            let hotkeyType = self.configManager.config.hotkey.type.lowercased()
+            let currentFlags = CGEventSource.flagsState(.combinedSessionState)
+            var isStillHeld = false
+
+            switch hotkeyType {
+            case "fn":
+                let fnMask: UInt64 = 0x800000
+                isStillHeld = (currentFlags.rawValue & fnMask) != 0 || currentFlags.contains(.maskSecondaryFn)
+            case "rightcommand":
+                isStillHeld = currentFlags.contains(.maskCommand)
+            case "rightoption":
+                isStillHeld = currentFlags.contains(.maskAlternate)
+            case "rightcontrol":
+                isStillHeld = currentFlags.contains(.maskControl)
+            case "ctrlspace":
+                isStillHeld = currentFlags.contains(.maskControl) && CGEventSource.keyState(.combinedSessionState, key: 49)
+            case "optspace":
+                isStillHeld = currentFlags.contains(.maskAlternate) && CGEventSource.keyState(.combinedSessionState, key: 49)
+            default:
+                let fnMask: UInt64 = 0x800000
+                isStillHeld = (currentFlags.rawValue & fnMask) != 0 || currentFlags.contains(.maskSecondaryFn)
+            }
+
+            if !isStillHeld {
+                self.stopHoldPolling()
+                self.isHotkeyCurrentlyPressed = false
+                AppLogger.shared.log("[HotKey] Hardware release detected via flagsState. Triggering onHotkeyUp().")
+                DispatchQueue.main.async {
+                    self.onHotkeyUp()
+                }
+            }
+        }
+    }
+
+    private func stopHoldPolling() {
+        holdPollTimer?.invalidate()
+        holdPollTimer = nil
     }
 
     // MARK: - Event Tap Setup
@@ -143,12 +198,12 @@ public final class HotKeyMonitor {
 
     private func setupNSEventMonitors() {
         if globalMonitor == nil {
-            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
                 self?.handleNSEvent(event)
             }
         }
         if localMonitor == nil {
-            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
                 self?.handleNSEvent(event)
                 return event
             }
@@ -189,7 +244,15 @@ public final class HotKeyMonitor {
     private func handleNSEvent(_ event: NSEvent) {
         if event.type == .keyDown && event.keyCode == 53 {
             handleEscPressed()
-        } else if event.type == .flagsChanged || event.type == .keyDown {
+            return
+        }
+
+        // If eventTap is connected, let CGEventTap handle it to avoid duplicate triggers
+        if eventTap != nil {
+            return
+        }
+
+        if event.type == .flagsChanged || event.type == .keyDown || event.type == .keyUp {
             let cgFlags = CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue))
             handleKeyEvent(flags: cgFlags, keyCode: Int64(event.keyCode), isKeyDownEvent: (event.type == .keyDown))
         }
@@ -221,7 +284,6 @@ public final class HotKeyMonitor {
 
         switch hotkeyType {
         case "fn":
-            // Check secondary Fn mask (0x800000), keyCode 63, or function modifier
             let fnMask: UInt64 = 0x800000
             let hasFnFlag = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn)
             isPressed = hasFnFlag || (keyCode == 63 && hasFnFlag)
@@ -236,19 +298,16 @@ public final class HotKeyMonitor {
             isPressed = (keyCode == 62) && flags.contains(.maskControl)
 
         case "ctrlspace":
-            // Control (flags) + Space (keycode 49)
             if keyCode == 49 && flags.contains(.maskControl) {
                 isPressed = isKeyDownEvent
             }
 
         case "optspace":
-            // Option (flags) + Space (keycode 49)
             if keyCode == 49 && flags.contains(.maskAlternate) {
                 isPressed = isKeyDownEvent
             }
 
         default:
-            // Default to Fn
             let fnMask: UInt64 = 0x800000
             isPressed = (flags.rawValue & fnMask) != 0 || flags.contains(.maskSecondaryFn) || keyCode == 63
         }
@@ -261,7 +320,7 @@ public final class HotKeyMonitor {
             }
         } else if !isPressed && isHotkeyCurrentlyPressed {
             isHotkeyCurrentlyPressed = false
-            AppLogger.shared.log("[HotKey] Hotkey released (type: \(hotkeyType))")
+            AppLogger.shared.log("[HotKey] Hotkey released via event (type: \(hotkeyType))")
             DispatchQueue.main.async { [weak self] in
                 self?.onHotkeyUp()
             }
@@ -274,6 +333,7 @@ public final class HotKeyMonitor {
         switch state {
         case .idle:
             state = .holding(startTime: Date())
+            startHoldPolling()
             delegate?.hotKeyDidBeginHold()
 
         case .waitingForDoubleTap:
@@ -289,6 +349,7 @@ public final class HotKeyMonitor {
     }
 
     private func onHotkeyUp() {
+        stopHoldPolling()
         let thresholdMs = configManager.config.hotkey.doubleTapThresholdMs
         let thresholdSec = Double(thresholdMs) / 1000.0
 
