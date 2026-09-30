@@ -243,13 +243,14 @@ public final class ConfigManager {
 
     public func saveEnv() {
         ensureDirectoriesExist()
+        let allowedKeys: Set<String> = ["GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "LLM_API_KEY"]
         var lines: [String] = [
             "# ShoutFlow Environment Configuration",
             "# Updated via ShoutFlow Settings Window",
             ""
         ]
         for (k, v) in env.sorted(by: { $0.key < $1.key }) {
-            if !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if allowedKeys.contains(k) && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 lines.append("\(k)=\(v)")
             }
         }
@@ -270,6 +271,10 @@ public final class ConfigManager {
     }
 
     public func getEnv(_ key: String) -> String? {
+        if let val = env[key], !val.isEmpty {
+            return val
+        }
+        loadEnv()
         if let val = env[key], !val.isEmpty {
             return val
         }
