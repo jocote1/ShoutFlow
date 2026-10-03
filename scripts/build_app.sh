@@ -19,6 +19,9 @@ mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
 cp "${BIN_PATH}" "${APP_BUNDLE}/Contents/MacOS/ShoutFlow"
 cp "${PROJECT_DIR}/Resources/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+if [[ -f "${PROJECT_DIR}/Resources/AppIcon.icns" ]]; then
+    cp "${PROJECT_DIR}/Resources/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+fi
 
 # Generate default config and models dir if not already present
 mkdir -p "${HOME}/.config/shoutflow/models"

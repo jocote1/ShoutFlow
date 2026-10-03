@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="ShoutFlow" width="800">
+</p>
+
 # ShoutFlow
 
 ShoutFlow is an open-source macOS menu bar app for voice dictation, built as an alternative to Wispr Flow.
