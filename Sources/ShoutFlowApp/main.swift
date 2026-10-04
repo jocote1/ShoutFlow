@@ -32,7 +32,7 @@ if args.contains("--help") || args.contains("-h") {
 }
 
 if args.contains("--version") || args.contains("-v") {
-    print("ShoutFlow version 1.1.0")
+    print("ShoutFlow version 1.1.1")
     exit(0)
 }
 

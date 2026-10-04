@@ -28,7 +28,7 @@ It lets you hold a hotkey to record audio, transcribes it locally using whisper.
 ## Installation
 
 ### Pre-built App
-Download the latest `ShoutFlow-v1.1.0-macOS.zip` from the [Releases](https://github.com/jocote1/ShoutFlow/releases) page, unzip it, and drag `ShoutFlow.app` into `/Applications`.
+Download the latest `ShoutFlow-v1.1.1-macOS.zip` from the [Releases](https://github.com/jocote1/ShoutFlow/releases) page, unzip it, and drag `ShoutFlow.app` into `/Applications`.
 
 ### Build from Source
 Requirements: macOS 13.0+, Xcode command line tools, and Swift 5.9+.
