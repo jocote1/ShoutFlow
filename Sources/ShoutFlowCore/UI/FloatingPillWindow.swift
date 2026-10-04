@@ -8,6 +8,7 @@ public enum PillState: Equatable {
     case cleaning
     case canceled
     case done
+    case error(String)
 }
 
 public final class FloatingPillWindowController: NSWindowController {
@@ -130,14 +131,16 @@ public final class FloatingPillWindowController: NSWindowController {
         subtitleLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
         subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.70)
         subtitleLabel.frame = NSRect(x: 38, y: 8, width: 172, height: 14)
+        subtitleLabel.lineBreakMode = .byTruncatingTail
         containerView.addSubview(subtitleLabel)
 
         pillPanel.contentView = containerView
     }
 
-    public func updateState(_ state: PillState) {
+    public func updateState(_ requestedState: PillState) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            let state: PillState = ConfigManager.shared.config.ui.showFloatingPill ? requestedState : .hidden
             self.currentState = state
             AppLogger.shared.log("[Pill] Updating state to: \(state)")
 
@@ -165,7 +168,7 @@ public final class FloatingPillWindowController: NSWindowController {
 
                 self.setBarColors(NSColor.systemRed)
                 self.titleLabel.stringValue = "Hold to Talk"
-                self.subtitleLabel.stringValue = "Release to paste · Esc cancels"
+                self.subtitleLabel.stringValue = "Release to paste, Esc to cancel"
                 self.startAudioMetering()
 
             case .handsFree(let elapsed, let maxSec):
@@ -181,7 +184,7 @@ public final class FloatingPillWindowController: NSWindowController {
                 let sec = elapsed % 60
                 let maxMin = maxSec / 60
                 let maxSecRemainder = maxSec % 60
-                self.subtitleLabel.stringValue = String(format: "%d:%02d / %d:%02d · Tap hotkey to stop", min, sec, maxMin, maxSecRemainder)
+                self.subtitleLabel.stringValue = String(format: "%d:%02d / %d:%02d, tap hotkey to stop", min, sec, maxMin, maxSecRemainder)
                 self.startAudioMetering()
 
             case .transcribing:
@@ -193,7 +196,7 @@ public final class FloatingPillWindowController: NSWindowController {
                 self.spinner.startAnimation(nil)
 
                 self.titleLabel.stringValue = "Transcribing..."
-                self.subtitleLabel.stringValue = "Whisper · Esc cancels"
+                self.subtitleLabel.stringValue = "Esc to cancel"
 
             case .cleaning:
                 self.showPanel()
@@ -203,10 +206,11 @@ public final class FloatingPillWindowController: NSWindowController {
                 self.spinner.isHidden = false
                 self.spinner.startAnimation(nil)
 
-                self.titleLabel.stringValue = "Refining with AI..."
-                self.subtitleLabel.stringValue = "Removing fillers & casing"
+                self.titleLabel.stringValue = "Cleaning up text..."
+                self.subtitleLabel.stringValue = "Fixing fillers and punctuation"
 
             case .canceled:
+                self.showPanel()
                 self.stopAudioMetering()
                 self.waveformStack.isHidden = true
                 self.spinner.isHidden = true
@@ -225,6 +229,7 @@ public final class FloatingPillWindowController: NSWindowController {
                 }
 
             case .done:
+                self.showPanel()
                 self.stopAudioMetering()
                 self.waveformStack.isHidden = true
                 self.spinner.isHidden = true
@@ -232,12 +237,31 @@ public final class FloatingPillWindowController: NSWindowController {
                 self.statusDot.isHidden = false
                 self.statusDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
 
-                self.titleLabel.stringValue = "Pasted ✓"
-                self.subtitleLabel.stringValue = "Clipboard updated"
+                self.titleLabel.stringValue = "Pasted"
+                self.subtitleLabel.stringValue = "Text inserted"
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
                     guard let self = self else { return }
                     if self.currentState == .done {
+                        self.updateState(.hidden)
+                    }
+                }
+
+            case .error(let message):
+                self.showPanel()
+                self.stopAudioMetering()
+                self.waveformStack.isHidden = true
+                self.spinner.isHidden = true
+                self.spinner.stopAnimation(nil)
+                self.statusDot.isHidden = false
+                self.statusDot.layer?.backgroundColor = NSColor.systemRed.cgColor
+
+                self.titleLabel.stringValue = "Something went wrong"
+                self.subtitleLabel.stringValue = message.replacingOccurrences(of: "\n", with: " ")
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                    guard let self = self else { return }
+                    if self.currentState == state {
                         self.updateState(.hidden)
                     }
                 }

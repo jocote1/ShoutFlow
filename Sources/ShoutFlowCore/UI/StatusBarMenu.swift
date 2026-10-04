@@ -19,6 +19,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
     private var groqWhisperItem: NSMenuItem!
     private var openaiWhisperItem: NSMenuItem!
     private var launchAtLoginItem: NSMenuItem!
+    private var hotkeyItem: NSMenuItem!
 
     public override init() {
         super.init()
@@ -45,7 +46,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
             button.image = image
         } else {
             // Fallback text if system symbols not available
-            button.title = isEnabled ? "🎙️" : "🎙️(Off)"
+            button.title = isEnabled ? "ShoutFlow" : "ShoutFlow (off)"
         }
     }
 
@@ -54,7 +55,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         menu.delegate = self
 
         // App Header
-        let titleItem = NSMenuItem(title: "ShoutFlow AI Dictation", action: nil, keyEquivalent: "")
+        let titleItem = NSMenuItem(title: "ShoutFlow", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
         menu.addItem(titleItem)
 
@@ -65,7 +66,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         menu.addItem(enabledMenuItem)
 
         // Manual / Test Dictation Trigger
-        manualDictateItem = NSMenuItem(title: "🎙️ Start Dictation (Manual / Test)", action: #selector(toggleManualDictation), keyEquivalent: "d")
+        manualDictateItem = NSMenuItem(title: "Start Dictation (Test)", action: #selector(toggleManualDictation), keyEquivalent: "d")
         manualDictateItem.target = self
         menu.addItem(manualDictateItem)
 
@@ -75,7 +76,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         let engineItem = NSMenuItem(title: "Transcription Provider", action: nil, keyEquivalent: "")
         let engineSubmenu = NSMenu()
 
-        priorityProviderItem = NSMenuItem(title: "Priority Fallback (Local → Groq → OpenAI)", action: #selector(selectPriorityProvider), keyEquivalent: "")
+        priorityProviderItem = NSMenuItem(title: "Automatic Fallback (Local, then Groq, then OpenAI)", action: #selector(selectPriorityProvider), keyEquivalent: "")
         priorityProviderItem.target = self
         engineSubmenu.addItem(priorityProviderItem)
 
@@ -83,11 +84,11 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         localWhisperItem.target = self
         engineSubmenu.addItem(localWhisperItem)
 
-        groqWhisperItem = NSMenuItem(title: "Groq Whisper API (Ultra-Fast)", action: #selector(selectGroqWhisper), keyEquivalent: "")
+        groqWhisperItem = NSMenuItem(title: "Groq Whisper API", action: #selector(selectGroqWhisper), keyEquivalent: "")
         groqWhisperItem.target = self
         engineSubmenu.addItem(groqWhisperItem)
 
-        openaiWhisperItem = NSMenuItem(title: "OpenAI Whisper (GPT-Transcribe)", action: #selector(selectOpenAIWhisper), keyEquivalent: "")
+        openaiWhisperItem = NSMenuItem(title: "OpenAI Transcription API", action: #selector(selectOpenAIWhisper), keyEquivalent: "")
         openaiWhisperItem.target = self
         engineSubmenu.addItem(openaiWhisperItem)
 
@@ -95,20 +96,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         menu.addItem(engineItem)
 
         // Hotkey Display
-        let hotkeyType = ConfigManager.shared.config.hotkey.type
-        let hotkeyDisplay: String
-        switch hotkeyType.lowercased() {
-        case "fn": hotkeyDisplay = "Fn (Globe)"
-        case "rightoption": hotkeyDisplay = "Right Option (⌥)"
-        case "mouse4": hotkeyDisplay = "Mouse Button 4 (Back)"
-        case "mouse5": hotkeyDisplay = "Mouse Button 5 (Forward)"
-        case "rightcommand": hotkeyDisplay = "Right Command (⌘)"
-        case "rightcontrol": hotkeyDisplay = "Right Control (⌃)"
-        case "ctrlspace": hotkeyDisplay = "⌃Space"
-        case "optspace": hotkeyDisplay = "⌥Space"
-        default: hotkeyDisplay = hotkeyType.capitalized
-        }
-        let hotkeyItem = NSMenuItem(title: "Hotkey: \(hotkeyDisplay) (Hold · 2x Hands-Free · 3x Cancel)", action: #selector(openSettingsWindow), keyEquivalent: "")
+        hotkeyItem = NSMenuItem(title: StatusBarMenu.hotkeyMenuTitle(), action: #selector(openSettingsWindow), keyEquivalent: "")
         hotkeyItem.target = self
         menu.addItem(hotkeyItem)
 
@@ -159,7 +147,29 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
     public func menuWillOpen(_ menu: NSMenu) {
         enabledMenuItem.state = isEnabled ? .on : .off
         launchAtLoginItem.state = LaunchAtLogin.isEnabled ? .on : .off
+        refreshHotkeyTitle()
         refreshEngineSelection()
+    }
+
+    public func refreshHotkeyTitle() {
+        hotkeyItem?.title = StatusBarMenu.hotkeyMenuTitle()
+    }
+
+    private static func hotkeyMenuTitle() -> String {
+        let hotkeyType = ConfigManager.shared.config.hotkey.type
+        let hotkeyDisplay: String
+        switch hotkeyType.lowercased() {
+        case "fn": hotkeyDisplay = "Fn (Globe)"
+        case "rightoption": hotkeyDisplay = "Right Option"
+        case "mouse4": hotkeyDisplay = "Mouse Button 4"
+        case "mouse5": hotkeyDisplay = "Mouse Button 5"
+        case "rightcommand": hotkeyDisplay = "Right Command"
+        case "rightcontrol": hotkeyDisplay = "Right Control"
+        case "ctrlspace": hotkeyDisplay = "Control + Space"
+        case "optspace": hotkeyDisplay = "Option + Space"
+        default: hotkeyDisplay = hotkeyType.capitalized
+        }
+        return "Hotkey: \(hotkeyDisplay) (hold to talk, 2 taps for hands-free, 3 taps to cancel)"
     }
 
     private func refreshEngineSelection() {
@@ -225,13 +235,13 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
                 openSettingsWindow()
             }
         } else {
-            var info = "Installed Models:\n"
+            var info = "Installed models:\n"
             for m in installed {
                 let isActive = ModelManager.shared.isModelActive(m)
-                let tag = isActive ? " [ACTIVE]" : ""
-                info += "• \(m.name) (\(m.diskSizeString ?? m.estimatedSize))\(tag)\n"
+                let tag = isActive ? " (active)" : ""
+                info += "- \(m.name), \(m.diskSizeString ?? m.estimatedSize)\(tag)\n"
             }
-            info += "\nOffline local dictation is ready to use!"
+            info += "\nOffline dictation is ready to use."
             alert.informativeText = info
             alert.addButton(withTitle: "OK")
             alert.addButton(withTitle: "Open Settings...")
@@ -255,9 +265,9 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = "ShoutFlow System Permissions"
         var info = ""
-        info += "• Accessibility: \(isAccess ? "Granted ✓" : "Missing ✗ (Required for hotkey & Esc)")\n"
-        info += "• Microphone: \(isMic ? "Granted ✓" : "Missing ✗ (Required to record voice)")\n\n"
-        info += "If hotkeys or pasting do not work, please ensure ShoutFlow (or Terminal) is enabled in macOS System Settings."
+        info += "Accessibility: \(isAccess ? "Granted" : "Missing (required for the hotkey and Esc)")\n"
+        info += "Microphone: \(isMic ? "Granted" : "Missing (required to record your voice)")\n\n"
+        info += "If hotkeys or pasting do not work, make sure ShoutFlow (or Terminal) is enabled in macOS System Settings."
 
         alert.informativeText = info
         alert.addButton(withTitle: "OK")
@@ -283,9 +293,9 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
     public func setManualRecordingState(isRecording: Bool) {
         DispatchQueue.main.async { [weak self] in
             if isRecording {
-                self?.manualDictateItem.title = "⏹️ Stop Dictation & Paste"
+                self?.manualDictateItem.title = "Stop Dictation and Paste"
             } else {
-                self?.manualDictateItem.title = "🎙️ Start Dictation (Manual / Test)"
+                self?.manualDictateItem.title = "Start Dictation (Test)"
             }
         }
     }
@@ -308,7 +318,7 @@ public final class StatusBarMenu: NSObject, NSMenuDelegate {
         alert.informativeText = """
         If macOS System Settings shows ShoutFlow as enabled but dictation still does not respond:
 
-        1. Open System Settings → Privacy & Security → Accessibility.
+        1. Open System Settings > Privacy & Security > Accessibility.
         2. Click on 'ShoutFlow' and click the minus (-) button to remove it.
         3. Click the (+) button and re-add ShoutFlow from your Applications folder.
 

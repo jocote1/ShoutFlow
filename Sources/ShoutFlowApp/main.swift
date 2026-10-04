@@ -16,23 +16,23 @@ if args.contains("--help") || args.contains("-h") {
       --version, -v         Display version
       --help, -h            Show this help message
 
-    Hotkeys & Controls:
-      • Hold 'Fn' key:      Record while held. Release to transcribe and paste.
-      • Double-tap 'Fn':    Start hands-free recording session. Tap again to stop.
-                            (Auto-stops after 5 minutes of inactivity).
-      • Press 'Esc':        Passively cancel recording or in-flight transcription.
-      • Menu Bar:           Toggle on/off, change engine, launch at login.
+    Hotkeys and controls:
+      Hold Fn:              Record while held. Release to transcribe and paste.
+      Double-tap Fn:        Start a hands-free recording. Tap again to stop.
+                            (Auto-stops after 5 minutes by default.)
+      Esc:                  Cancel a recording or an in-progress transcription.
+      Menu bar:             Toggle on/off, change engine, launch at login.
 
     Configuration:
-      • Config file:        ~/.config/shoutflow/config.json
-      • Environment/Keys:   ~/.config/shoutflow/.env or ./.env
-      • Models directory:   ~/.config/shoutflow/models/
+      Config file:          ~/.config/shoutflow/config.json
+      Environment/Keys:     ~/.config/shoutflow/.env or ./.env
+      Models directory:     ~/.config/shoutflow/models/
     """)
     exit(0)
 }
 
 if args.contains("--version") || args.contains("-v") {
-    print("ShoutFlow version 1.0.0")
+    print("ShoutFlow version 1.1.0")
     exit(0)
 }
 
@@ -43,10 +43,10 @@ if args.contains("--check-permissions") {
     let modelInstalled = FileManager.default.fileExists(atPath: ConfigManager.shared.resolvedPath("~/.config/shoutflow/models/ggml-small.bin"))
 
     print("--- ShoutFlow System Check ---")
-    print("Accessibility (Input & CGEvent):  \(access ? "✓ Granted" : "✗ Not Granted (System Settings -> Privacy & Security -> Accessibility)")")
-    print("Microphone Permission:             \(mic ? "✓ Granted" : "✗ Not Granted (System Settings -> Privacy & Security -> Microphone)")")
-    print("Local whisper-cli Binary:         \(whisperInstalled ? "✓ Found at /opt/homebrew/bin/whisper-cli" : "✗ Not Found (Run `brew install whisper-cpp`)")")
-    print("Local Whisper ggml-small Model:    \(modelInstalled ? "✓ Found" : "✗ Missing (Run `./scripts/download_model.sh small`)")")
+    print("Accessibility:            \(access ? "Granted" : "Not granted (System Settings > Privacy & Security > Accessibility)")")
+    print("Microphone:               \(mic ? "Granted" : "Not granted (System Settings > Privacy & Security > Microphone)")")
+    print("whisper-cli binary:       \(whisperInstalled ? "Found at /opt/homebrew/bin/whisper-cli" : "Not found (run `brew install whisper-cpp`)")")
+    print("ggml-small model:         \(modelInstalled ? "Found" : "Missing (run `./scripts/download_model.sh small`)")")
     print("Config Directory:                  \(ConfigManager.configDirectory.path)")
     print("------------------------------")
     exit(0)

@@ -84,16 +84,15 @@ public final class TextInserter {
 
     private func simulateKeystrokes(_ text: String) {
         let source = CGEventSource(stateID: .combinedSessionState)
-        let utf16 = Array(text.utf16)
 
-        // Type in chunks or individual unicode characters
-        for char in utf16 {
-            var unit = char
+        // Send one full character per event so surrogate pairs (emoji, rare scripts) stay intact
+        for character in text {
+            var units = Array(String(character).utf16)
             let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
-            keyDown?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
+            keyDown?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
 
             let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
-            keyUp?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unit)
+            keyUp?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
 
             keyDown?.post(tap: .cghidEventTap)
             keyUp?.post(tap: .cghidEventTap)

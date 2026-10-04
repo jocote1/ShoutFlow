@@ -11,6 +11,6 @@ if [[ ! -d "build/ShoutFlow.app" ]]; then
     ./scripts/build_app.sh
 fi
 
-echo "🚀 Starting ShoutFlow..."
+echo "Starting ShoutFlow..."
 echo "Tip: Check the menu bar icon (waveform) to configure settings or switch transcription providers."
 open "${PROJECT_DIR}/build/ShoutFlow.app"

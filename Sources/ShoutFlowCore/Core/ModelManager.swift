@@ -115,6 +115,28 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
         let destURL = model.localURL
         let fm = FileManager.default
 
+        // Reject error pages saved as if they were the model
+        let statusCode = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 200
+        let downloadedSize = (try? fm.attributesOfItem(atPath: location.path)[.size] as? Int64) ?? 0
+        if statusCode != 200 || downloadedSize < 10_000_000 {
+            DispatchQueue.main.async {
+                self.currentlyDownloadingModelId = nil
+                self.downloadProgress = 0.0
+                self.activeDownloadTask = nil
+                self.targetModel = nil
+                let error = NSError(domain: "ModelManager", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Server returned HTTP \(statusCode) (\(downloadedSize) bytes)"])
+                self.downloadCompletion?(.failure(error))
+
+                let alert = NSAlert()
+                alert.messageText = "Download Failed"
+                alert.informativeText = "Could not download \(model.filename): \(error.localizedDescription)"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+            return
+        }
+
         do {
             if fm.fileExists(atPath: destURL.path) {
                 try fm.removeItem(at: destURL)
@@ -124,17 +146,19 @@ public final class ModelManager: NSObject, ObservableObject, URLSessionDownloadD
             DispatchQueue.main.async {
                 self.currentlyDownloadingModelId = nil
                 self.downloadProgress = 1.0
+                self.activeDownloadTask = nil
+                self.targetModel = nil
 
                 // Automatically activate downloaded model
                 self.setActiveModel(model)
 
-                let msg = "✓ Model '\(model.name)' downloaded successfully and activated for offline transcription!"
+                let msg = "Model '\(model.name)' downloaded and activated for offline transcription."
                 self.lastConfirmationMessage = msg
 
                 // Show native macOS confirmation dialog
                 let alert = NSAlert()
                 alert.messageText = "Model Download Complete"
-                alert.informativeText = "Whisper model '\(model.filename)' has been downloaded and verified (\(model.diskSizeString ?? model.estimatedSize)).\n\nShoutFlow is now ready for offline local dictation!"
+                alert.informativeText = "Whisper model '\(model.filename)' was downloaded (\(model.diskSizeString ?? model.estimatedSize)) and is now the active model."
                 alert.alertStyle = .informational
                 alert.addButton(withTitle: "OK")
                 alert.runModal()

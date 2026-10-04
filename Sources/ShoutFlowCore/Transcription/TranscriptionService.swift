@@ -25,6 +25,11 @@ public protocol TranscriptionService: AnyObject, Sendable {
     func cancel()
 }
 
+/// Holds data produced on one thread and read on another after a DispatchGroup has signalled completion.
+private final class DataBox: @unchecked Sendable {
+    var data = Data()
+}
+
 // MARK: - Local whisper.cpp Service
 
 public final class LocalWhisperService: TranscriptionService, @unchecked Sendable {
@@ -81,29 +86,33 @@ public final class LocalWhisperService: TranscriptionService, @unchecked Sendabl
             process.standardOutput = outputPipe
             process.standardError = errorPipe
 
-            self.currentProcess = process
-
-            do {
-                try process.run()
-            } catch {
-                self.currentProcess = nil
-                continuation.resume(throwing: TranscriptionError.processFailed(error.localizedDescription))
-                return
+            // Drain both pipes on background threads so a chatty process can never block on a full pipe buffer.
+            let outBox = DataBox()
+            let errBox = DataBox()
+            let drainGroup = DispatchGroup()
+            drainGroup.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                outBox.data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                drainGroup.leave()
+            }
+            drainGroup.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                errBox.data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                drainGroup.leave()
             }
 
+            // Install the handler before launching so a very fast exit is never missed.
             process.terminationHandler = { [weak self] proc in
                 self?.currentProcess = nil
+                drainGroup.wait()
 
                 if proc.terminationReason == .uncaughtSignal {
                     continuation.resume(throwing: TranscriptionError.cancelled)
                     return
                 }
 
-                let outData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-                let stdoutStr = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let stderrStr = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let stdoutStr = String(data: outBox.data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let stderrStr = String(data: errBox.data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
                 if proc.terminationStatus == 0 {
                     let cleaned = stdoutStr
@@ -125,6 +134,18 @@ public final class LocalWhisperService: TranscriptionService, @unchecked Sendabl
                 } else {
                     continuation.resume(throwing: TranscriptionError.processFailed("Status \(proc.terminationStatus): \(stderrStr)"))
                 }
+            }
+
+            self.currentProcess = process
+
+            do {
+                try process.run()
+            } catch {
+                self.currentProcess = nil
+                // Close the write ends so the drain threads see EOF and exit.
+                try? outputPipe.fileHandleForWriting.close()
+                try? errorPipe.fileHandleForWriting.close()
+                continuation.resume(throwing: TranscriptionError.processFailed(error.localizedDescription))
             }
         }
     }
@@ -293,8 +314,10 @@ public final class PriorityTranscriptionService: TranscriptionService, @unchecke
             }
             AppLogger.shared.log("[Priority STT] Stage 1 returned empty speech. Trying fallback...")
         } catch {
+            if PriorityTranscriptionService.isCancellation(error) { throw error }
             AppLogger.shared.log("[Priority STT] Stage 1 (Local) failed: \(error.localizedDescription). Falling back to Groq...")
         }
+        try Task.checkCancellation()
 
         // Stage 2: Try Groq Whisper (whisper-large-v3-turbo)
         if let groqKey = ConfigManager.shared.getEnv("GROQ_API_KEY"), !groqKey.isEmpty {
@@ -309,11 +332,13 @@ public final class PriorityTranscriptionService: TranscriptionService, @unchecke
                 }
                 AppLogger.shared.log("[Priority STT] Stage 2 returned empty speech. Trying fallback...")
             } catch {
+                if PriorityTranscriptionService.isCancellation(error) { throw error }
                 AppLogger.shared.log("[Priority STT] Stage 2 (Groq) failed: \(error.localizedDescription). Falling back to OpenAI...")
             }
         } else {
             AppLogger.shared.log("[Priority STT] No GROQ_API_KEY available. Skipping Stage 2.")
         }
+        try Task.checkCancellation()
 
         // Stage 3: Try OpenAI (gpt-transcribe / whisper-1)
         if let openaiKey = ConfigManager.shared.getEnv("OPENAI_API_KEY"), !openaiKey.isEmpty {
@@ -324,7 +349,14 @@ public final class PriorityTranscriptionService: TranscriptionService, @unchecke
             return trimmed
         }
 
-        throw TranscriptionError.apiError("Priority fallback exhausted: Local model failed, and neither GROQ_API_KEY nor OPENAI_API_KEY is available in .env.")
+        throw TranscriptionError.apiError("Local transcription failed and no GROQ_API_KEY or OPENAI_API_KEY is set.")
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let transcriptionError = error as? TranscriptionError, case .cancelled = transcriptionError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
     }
 
     public func cancel() {

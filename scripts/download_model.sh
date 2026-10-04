@@ -36,12 +36,12 @@ esac
 TARGET="${MODELS_DIR}/${FILE}"
 
 if [[ -f "${TARGET}" ]]; then
-    echo "✓ Model ${FILE} is already installed at: ${TARGET}"
+    echo "Model ${FILE} is already installed at: ${TARGET}"
     exit 0
 fi
 
 echo "Downloading Whisper ${MODEL} model to ${TARGET}..."
 curl -L --progress-bar "${BASE_URL}/${FILE}" -o "${TARGET}"
 
-echo "✓ Successfully downloaded ${FILE} (${TARGET})"
+echo "Successfully downloaded ${FILE} (${TARGET})"
 echo "ShoutFlow is now ready for offline local transcription!"

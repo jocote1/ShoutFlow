@@ -11,6 +11,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     private var currentTranscriptionService: TranscriptionService?
     private var currentLLMService: LLMService?
     private var activeProcessingTask: Task<Void, Never>?
+    /// Incremented whenever a recording starts or an operation is cancelled, so late results from older pipelines are ignored.
+    private var pipelineGeneration = 0
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -72,9 +74,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     // MARK: - HotKeyMonitorDelegate
 
     public func hotKeyDidBeginHold() {
-        guard statusBarMenu.isEnabled else { return }
+        guard statusBarMenu.isEnabled else {
+            hotKeyMonitor.setIdleState()
+            return
+        }
 
         // Cancel any pending in-flight transcription or LLM task
+        pipelineGeneration += 1
         activeProcessingTask?.cancel()
         activeProcessingTask = nil
         currentTranscriptionService?.cancel()
@@ -94,16 +100,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
         } catch {
             AppLogger.shared.log("[Audio] Failed to start audio recording: \(error.localizedDescription)")
             hotKeyMonitor.setIdleState()
+            pillWindow.updateState(.error("Could not start recording"))
         }
     }
 
     public func hotKeyDidReleaseHold() {
-        guard statusBarMenu.isEnabled else { return }
+        guard statusBarMenu.isEnabled else {
+            hotKeyMonitor.setIdleState()
+            return
+        }
         processRecordingAndPaste()
     }
 
     public func hotKeyDidEnterHandsFree() {
-        guard statusBarMenu.isEnabled else { return }
+        guard statusBarMenu.isEnabled else {
+            hotKeyMonitor.setIdleState()
+            return
+        }
 
         if !AudioRecorder.shared.isRecording {
             do {
@@ -113,6 +126,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
             } catch {
                 AppLogger.shared.log("[Audio] Failed to start audio recording for hands-free: \(error.localizedDescription)")
                 hotKeyMonitor.setIdleState()
+                pillWindow.updateState(.error("Could not start recording"))
                 return
             }
         } else {
@@ -133,7 +147,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
     }
 
     public func hotKeyDidExitHandsFree() {
-        guard statusBarMenu.isEnabled else { return }
+        guard statusBarMenu.isEnabled else {
+            hotKeyMonitor.setIdleState()
+            return
+        }
         processRecordingAndPaste()
     }
 
@@ -162,6 +179,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
 
         setupServices()
 
+        pipelineGeneration += 1
+        let generation = pipelineGeneration
+        let transcriptionService = currentTranscriptionService
+        let llmService = currentLLMService
+
         activeProcessingTask?.cancel()
         activeProcessingTask = Task { [weak self] in
             guard let self = self else { return }
@@ -169,12 +191,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
             defer {
                 try? FileManager.default.removeItem(at: audioURL)
                 Task { @MainActor in
+                    // Only the newest pipeline may reset shared state
+                    guard self.pipelineGeneration == generation else { return }
+                    self.activeProcessingTask = nil
                     self.hotKeyMonitor.setIdleState()
                 }
             }
 
             do {
-                guard let service = self.currentTranscriptionService else {
+                guard let service = transcriptionService else {
                     throw TranscriptionError.invalidResponse
                 }
 
@@ -182,12 +207,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
                 AppLogger.shared.log("[Pipeline] Transcribing audio with \(ConfigManager.shared.config.transcription.provider)...")
                 let rawTranscript = try await service.transcribe(audioFileURL: audioURL)
                 let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+                try Task.checkCancellation()
 
                 guard !trimmed.isEmpty else {
                     AppLogger.shared.log("[Pipeline] Transcript was empty (no speech detected).")
-                    await MainActor.run {
-                        self.pillWindow.updateState(.hidden)
-                    }
+                    await self.updatePill(.hidden, generation: generation)
                     return
                 }
 
@@ -195,10 +219,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
 
                 // 2. LLM Post-Processing (filler removal, punctuation, casing)
                 let cleanedText: String
-                if ConfigManager.shared.config.llm.enabled, let llm = self.currentLLMService {
-                    await MainActor.run {
-                        self.pillWindow.updateState(.cleaning)
-                    }
+                if ConfigManager.shared.config.llm.enabled, let llm = llmService {
+                    await self.updatePill(.cleaning, generation: generation)
                     AppLogger.shared.log("[Pipeline] Refining transcript with LLM (\(ConfigManager.shared.config.llm.provider))...")
                     cleanedText = await llm.cleanTranscript(trimmed)
                 } else {
@@ -212,27 +234,36 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, HotKeyMonitorDe
                 // 3. Insert into active app (via Pasteboard + Cmd-V or Keystrokes)
                 await MainActor.run {
                     TextInserter.shared.insertText(cleanedText, config: ConfigManager.shared.config.insertion)
-                    if ConfigManager.shared.config.ui.showFloatingPill {
-                        self.pillWindow.updateState(.done)
-                    }
                 }
+                await self.updatePill(.done, generation: generation)
                 AppLogger.shared.log("[Pipeline] Successfully inserted text!")
             } catch is CancellationError {
                 AppLogger.shared.log("[Pipeline] Task cancelled.")
-                await MainActor.run {
-                    self.pillWindow.updateState(.canceled)
-                }
+                await self.updatePill(.canceled, generation: generation)
+            } catch TranscriptionError.cancelled {
+                AppLogger.shared.log("[Pipeline] Transcription cancelled.")
+                await self.updatePill(.canceled, generation: generation)
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                AppLogger.shared.log("[Pipeline] Network request cancelled.")
+                await self.updatePill(.canceled, generation: generation)
             } catch {
                 AppLogger.shared.log("[Pipeline] Error: \(error.localizedDescription)")
-                await MainActor.run {
-                    self.pillWindow.updateState(.canceled)
-                }
+                await self.updatePill(.error(error.localizedDescription), generation: generation)
             }
+        }
+    }
+
+    /// Updates the pill only if the pipeline that asked is still the current one.
+    private func updatePill(_ state: PillState, generation: Int) async {
+        await MainActor.run {
+            guard self.pipelineGeneration == generation else { return }
+            self.pillWindow.updateState(state)
         }
     }
 
     private func cancelCurrentOperation(notifyPill: Bool) {
         let wasActive = AudioRecorder.shared.isRecording || activeProcessingTask != nil
+        pipelineGeneration += 1
         AudioRecorder.shared.cancelRecording()
         currentTranscriptionService?.cancel()
         currentLLMService?.cancel()
